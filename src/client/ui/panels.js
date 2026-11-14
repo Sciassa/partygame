@@ -131,7 +131,7 @@ function lobbyPanel(ctx) {
         { class: 'panel' },
         h('div', { class: 'eyebrow' }, 'Lobby · Spin & Sip'),
         h('h2', { class: 'panel-title' }, vip ? 'Sei tu a dare il via' : 'Si aspetta il via'),
-        h('p', { class: 'muted' }, `${s.players.filter((p) => p.connected).length} birre al bancone`),
+        h('p', { class: 'muted' }, ((n) => `${n} ${n === 1 ? 'birra' : 'birre'} al bancone`)(s.players.filter((p) => p.connected).length)),
         h(
           'div',
           { class: 'settings-card' },

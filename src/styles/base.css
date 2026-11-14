@@ -653,3 +653,13 @@ body.happy-hour {
   border-right: 2px solid var(--ec, var(--amber));
   border-bottom: 2px solid var(--ec, var(--amber));
 }
+
+/* Canvas del palco 3D (TV e telefoni in Pocket): riempie il riquadro, la risoluzione la decide il renderer */
+.wheel-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}

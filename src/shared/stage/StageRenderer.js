@@ -23,7 +23,8 @@ import { JuiceDirector } from '../../three/JuiceDirector.ts';
  *
  * Qualità:
  *  - 'high': bloom + MSAA, DPR fino a 2 — TV/PC/tablet
- *  - 'low' : niente post-processing né ombre, DPR fino a 2 — telefoni
+ *  - 'medium': bloom (MSAA x2), niente ombre, DPR fino a 2.5 — telefoni in Pocket
+ *  - 'low' : niente post-processing né ombre, DPR fino a 2.5
  * Un monitor FPS degrada da solo (prima il bloom, poi la risoluzione) se si scende sotto ~50 fps.
  *
  * Regia e "juice" (src/three/JuiceDirector.ts): telecamera dinamica (campo largo → carrellata →
@@ -42,7 +43,9 @@ export class StageRenderer extends Emitter {
     super();
     this.container = container;
     this.quality = quality;
-    this.maxDpr = 2; // i telefoni hanno DPR 3: 2 basta per testi nitidi, il monitor FPS scende se serve
+    // Risoluzione: TV/PC fino a DPR 2 (schermo grande, bloom + ombre); telefoni fino a 2.5
+    // (gli iPhone hanno DPR 3: testi e bordi nitidi). Il monitor FPS scende a gradini se serve.
+    this.maxDpr = quality === 'high' ? 2 : 2.5;
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', alpha: false, stencil: false });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -54,6 +57,9 @@ export class StageRenderer extends Emitter {
     this.renderer.shadowMap.enabled = quality === 'high';
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.classList.add('wheel-canvas');
+    // Dimensione CSS anche inline: senza, il canvas verrebbe mostrato alla sua risoluzione in pixel
+    // fisici (2-3 volte più grande del riquadro sui telefoni) e ritagliato.
+    Object.assign(this.renderer.domElement.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', display: 'block' });
     this.renderer.domElement.addEventListener('webglcontextlost', (e) => e.preventDefault());
     container.append(this.renderer.domElement);
 
@@ -62,7 +68,7 @@ export class StageRenderer extends Emitter {
     this.pub = buildPubSet(this.renderer, this.scene, { shadows: quality === 'high' });
 
     this.wheel = new WheelModel({
-      textureSize: quality === 'high' ? 2048 : 1024,
+      textureSize: 2048,
       anisotropy: this.renderer.capabilities.getMaxAnisotropy(),
     });
     this.scene.add(this.wheel.root);
@@ -82,8 +88,10 @@ export class StageRenderer extends Emitter {
     this.scene.add(this.avatars.root);
     this.playerCount = 0;
 
-    if (quality === 'high') {
-      const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+    // Bloom anche sui telefoni ('medium'): la lampada e i neon "brillano" come sulla TV.
+    // Con il post-processing l'antialiasing lo fa il multisample del render target.
+    if (quality === 'high' || quality === 'medium') {
+      const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: quality === 'high' ? 4 : 2 });
       this.composer = new EffectComposer(this.renderer, target);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
       this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.5, 0.82));
@@ -235,11 +243,11 @@ export class StageRenderer extends Emitter {
     for (const r of radii) {
       for (const deg of [-70, -44, -18, 18, 44, 70]) {
         const { x, z } = arcPoint(THREE.MathUtils.degToRad(deg), r, stretch);
-        seat.push(new THREE.Vector3(x + Math.sign(x) * 0.45, floor - 0.05, z), new THREE.Vector3(x, floor + 2.0, z));
+        seat.push(new THREE.Vector3(x + Math.sign(x) * 0.55, floor - 0.05, z), new THREE.Vector3(x, floor + 2.35, z));
       }
     }
     const padX = LAUNCH_PAD.x * Math.min(1, stretch);
-    const pad = [new THREE.Vector3(padX + 0.7, floor - 0.05, LAUNCH_PAD.z + 0.6), new THREE.Vector3(padX - 0.7, floor - 0.05, LAUNCH_PAD.z + 0.6), new THREE.Vector3(padX, floor + 2.1, LAUNCH_PAD.z)];
+    const pad = [new THREE.Vector3(padX + 0.7, floor - 0.05, LAUNCH_PAD.z + 0.6), new THREE.Vector3(padX - 0.7, floor - 0.05, LAUNCH_PAD.z + 0.6), new THREE.Vector3(padX, floor + 2.5, LAUNCH_PAD.z)];
     const basePoints = [new THREE.Vector3(R * 1.06, 0, 0), new THREE.Vector3(-R * 1.06, 0, 0), lampTop, ...seat, ...pad];
     const probe = this.#probe;
     probe.aspect = aspect;
@@ -354,8 +362,9 @@ export class StageRenderer extends Emitter {
       this.composer.dispose();
       this.composer = null;
     } else if (this.maxDpr > 1) {
-      console.info('[stage] fps bassi: riduco la risoluzione');
-      this.maxDpr = 1;
+      // a gradini: 2.5 → 2 → 1.5 → 1
+      this.maxDpr = Math.max(1, Math.min(this.maxDpr, window.devicePixelRatio || 1) - 0.5);
+      console.info(`[stage] fps bassi: riduco la risoluzione (DPR ${this.maxDpr})`);
       this.#resize();
     }
   }

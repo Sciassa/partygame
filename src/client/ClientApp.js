@@ -390,7 +390,7 @@ export class ClientApp {
     if (this.#wheelLoading) return;
     this.#wheelLoading = true;
     const [{ StageRenderer }, { StageSync }] = await Promise.all([import('../shared/stage/StageRenderer.js'), import('../shared/stage/StageSync.js')]);
-    const stage = new StageRenderer(this.wheelEl, { quality: 'low' });
+    const stage = new StageRenderer(this.wheelEl, { quality: 'medium' });
     this.#stageSync = new StageSync(stage, { topSlot: this.topSlot, overlayTopSlot: false });
     if (this.snapshot) this.#stageSync.applyState(this.snapshot);
   }

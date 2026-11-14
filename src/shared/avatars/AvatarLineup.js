@@ -519,7 +519,8 @@ export class AvatarLineup {
         if (i < frontSlots.length) slots.push(frontSlots[i]);
       }
     }
-    const scale = (n > 6 ? 0.92 : 1.05) * (0.85 + 0.15 * Math.min(1, a));
+    // birre protagoniste: più grandi quando sono poche (sui telefoni si vedono bene anche in piccolo)
+    const scale = n > 6 ? 1.0 : 1.25;
     const positions = slots.map(({ ang, r }) => arcPoint(ang, r, a));
 
     ids.forEach((id) => {
@@ -629,29 +630,35 @@ export class AvatarLineup {
     entry.name = player.name;
     entry.color = player.color;
     const canvas = entry.label.material.map.image;
-    const fontSize = 42;
+    // canvas a doppia risoluzione: etichette nitide anche sugli schermi Retina
+    const fontSize = 84;
     const measure = canvas.getContext('2d');
     measure.font = `500 ${fontSize}px ${LABEL_FONT}`;
     const text = player.name.toUpperCase();
-    const w = Math.ceil(measure.measureText(text).width) + 52;
+    const w = Math.ceil(measure.measureText(text).width) + 104;
+    const H = 140;
     canvas.width = w;
-    canvas.height = 70;
+    canvas.height = H;
     const ctx = canvas.getContext('2d');
     ctx.font = `500 ${fontSize}px ${LABEL_FONT}`;
-    ctx.fillStyle = 'rgba(20, 24, 36, 0.86)';
+    ctx.fillStyle = 'rgba(20, 24, 36, 0.9)';
     ctx.beginPath();
-    ctx.roundRect(2, 2, w - 4, 66, 33);
+    ctx.roundRect(4, 4, w - 8, H - 8, (H - 8) / 2);
     ctx.fill();
     ctx.strokeStyle = player.color;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 6;
     ctx.stroke();
     ctx.fillStyle = '#f3d595';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, w / 2, 37);
-    entry.label.material.map.needsUpdate = true;
-    const h = 0.22;
-    entry.label.scale.set((h * w) / 70, h, 1);
+    ctx.fillText(text, w / 2, H / 2 + 4);
+    const map = entry.label.material.map;
+    map.anisotropy = 4;
+    map.generateMipmaps = true;
+    map.minFilter = THREE.LinearMipmapLinearFilter;
+    map.needsUpdate = true;
+    const h = 0.27;
+    entry.label.scale.set((h * w) / H, h, 1);
     // badge del nome sopra il bicchiere: altezza del vetro + 0.45
     entry.labelY = entry.avatar.glassTop + 0.45;
     entry.label.position.set(0, entry.labelY, 0);

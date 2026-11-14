@@ -40,8 +40,15 @@ export function registerServiceWorker() {
     try {
       const registration = await navigator.serviceWorker.register('./sw.js', { scope: './' });
 
+      // Ricarichiamo SOLO quando l'utente ha accettato un aggiornamento. Alla primissima visita il
+      // SW nuovo fa clients.claim() e scatena 'controllerchange': ricaricare lì riporterebbe alla
+      // home chi ha appena creato/raggiunto una stanza.
+      let userAccepted = false;
       const announce = (worker) => {
-        pwa.pendingUpdate = () => worker.postMessage({ type: 'SKIP_WAITING' });
+        pwa.pendingUpdate = () => {
+          userAccepted = true;
+          worker.postMessage({ type: 'SKIP_WAITING' });
+        };
         pwa.emit('update', pwa.pendingUpdate);
       };
 
@@ -56,7 +63,7 @@ export function registerServiceWorker() {
 
       let reloading = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (reloading) return;
+        if (reloading || !userAccepted) return;
         reloading = true;
         window.location.reload();
       });

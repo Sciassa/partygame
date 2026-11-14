@@ -167,7 +167,7 @@ export class LaunchPad {
 
   constructor(position: THREE.Vector3, { shadows = false }: { shadows?: boolean } = {}) {
     this.position = position.clone();
-    const discMat = new THREE.MeshStandardMaterial({ color: 0x1c2233, roughness: 0.55, metalness: 0 });
+    const discMat = new THREE.MeshStandardMaterial({ color: 0x2a3146, roughness: 0.45, metalness: 0, emissive: new THREE.Color(0x3a2a10), emissiveIntensity: 0.25 });
     this.#disc = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.68, 0.08, 40), discMat);
     this.#disc.position.copy(position).add(new THREE.Vector3(0, 0.04, 0));
     this.#disc.receiveShadow = true;
@@ -208,10 +208,10 @@ export class LaunchPad {
     this.#level += (this.#target - this.#level) * follow(4, dt);
     const pulse = 0.85 + 0.15 * Math.sin(t * 3);
     this.spot.intensity = 26 * this.#level;
-    (this.#cone.material as THREE.MeshBasicMaterial).opacity = 0.05 * this.#level * pulse;
+    (this.#cone.material as THREE.MeshBasicMaterial).opacity = 0.022 * this.#level * pulse;
     const ringMat = this.#ring.material as THREE.MeshBasicMaterial;
     ringMat.color.copy(this.#color).multiplyScalar(1 + this.#level * 1.5 * pulse);
-    ringMat.opacity = 0.35 + 0.6 * this.#level;
+    ringMat.opacity = 0.6 + 0.4 * this.#level;
   }
 
   dispose(): void {
