@@ -130,7 +130,7 @@ class HostScreen {
           'li',
           { class: `player ${p.connected ? '' : 'offline'} ${p.id === s.turnPlayerId ? 'turn' : ''}`, style: { '--pc': p.color } },
           beerIcon(p.beer, 'sm'),
-          h('span', { class: 'player-info' }, h('span', { class: 'player-name' }, p.name), h('span', { class: 'player-beer' }, getBeer(p.beer).name)),
+          h('span', { class: 'player-info' }, h('span', { class: 'player-name' }, p.name), h('span', { class: 'player-beer' }, p.beer ? getBeer(p.beer).name : 'Fuori dal pub')),
           h('span', { class: 'player-coins' }, `${p.coins}`, h('span', { class: 'coin' })),
         ),
       ),

@@ -29,6 +29,8 @@ export class AvatarLineup {
   #phase = PHASE.IDLE;
   #ringGeo = new THREE.RingGeometry(0.44, 0.56, 48);
   #glowTexture;
+  #contactTexture;
+  #contactGeo = new THREE.PlaneGeometry(1.3, 1.1).rotateX(-Math.PI / 2);
 
   /**
    * @param {{ surfaceY:number, frontZ:number }} opts  piano del bancone e Z della prima fila
@@ -38,6 +40,7 @@ export class AvatarLineup {
     this.frontZ = frontZ;
     this.#ringGeo.rotateX(-Math.PI / 2);
     this.#glowTexture = makeGlowTexture();
+    this.#contactTexture = makeGlowTexture();
   }
 
   /** Mezza larghezza visibile (unità mondo) all'altezza delle file: decide quante birre per fila. */
@@ -54,7 +57,7 @@ export class AvatarLineup {
     for (const [id, entry] of this.#entries) {
       if (!ids.has(id)) {
         this.root.remove(entry.group);
-        this.root.remove(entry.ring, entry.glow);
+        this.root.remove(entry.ring, entry.glow, entry.contact);
         this.#disposeEntry(entry);
         this.#entries.delete(id);
       }
@@ -152,6 +155,13 @@ export class AvatarLineup {
       }
       entry.ring.position.set(group.position.x, this.surfaceY + 0.01, group.position.z);
       entry.glow.position.set(group.position.x, this.surfaceY + 0.008, group.position.z);
+
+      // ombra di contatto: più piccola e chiara quando il bicchiere è in aria
+      const lift = Math.max(0, y - this.surfaceY);
+      const k = 1 / (1 + lift * 1.6);
+      entry.contact.position.set(group.position.x, this.surfaceY + 0.006, group.position.z + 0.04);
+      entry.contact.scale.setScalar(entry.scale * Math.max(0.001, spawn) * (0.75 + 0.25 * k));
+      entry.contact.material.opacity = (entry.connected ? 0.7 : 0.35) * k;
     }
   }
 
@@ -160,6 +170,8 @@ export class AvatarLineup {
     this.#entries.clear();
     this.#ringGeo.dispose();
     this.#glowTexture.dispose();
+    this.#contactTexture.dispose();
+    this.#contactGeo.dispose();
   }
 
   // ------------------------------------------------------------------
@@ -171,6 +183,7 @@ export class AvatarLineup {
     entry.ring.material.dispose();
     entry.glow.geometry.dispose();
     entry.glow.material.dispose();
+    entry.contact.material.dispose();
   }
 
   #create(player, now) {
@@ -192,7 +205,13 @@ export class AvatarLineup {
       new THREE.CircleGeometry(0.9, 32).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ map: this.#glowTexture, color: player.color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }),
     );
-    this.root.add(group, ring, glow);
+    // ombra di contatto sfumata (economica: c'è anche sui telefoni, dove le ombre reali sono spente)
+    const contact = new THREE.Mesh(
+      this.#contactGeo,
+      new THREE.MeshBasicMaterial({ map: this.#contactTexture, color: 0x000000, transparent: true, depthWrite: false }),
+    );
+    contact.renderOrder = 1;
+    this.root.add(group, ring, glow, contact);
 
     const entry = {
       group,
@@ -200,6 +219,7 @@ export class AvatarLineup {
       label,
       ring,
       glow,
+      contact,
       seed: Math.random() * 10,
       spawnAt: now,
       swapAt: 0,

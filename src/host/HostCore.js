@@ -131,7 +131,8 @@ export class HostCore extends Emitter {
     }
 
     const existing = state.findByClientId(msg.clientId);
-    if (!existing && state.isFull()) return this.#reject(link, REJECT_REASON.ROOM_FULL);
+    // Piena = 12 connessi. Chi rientra dopo una disconnessione ha bisogno di una birra dal pool come un nuovo.
+    if ((!existing || !existing.connected) && state.isFull()) return this.#reject(link, REJECT_REASON.ROOM_FULL);
 
     // Stesso giocatore che rientra mentre la vecchia connessione è ancora "appesa": la sostituiamo.
     if (existing) {
@@ -146,6 +147,7 @@ export class HostCore extends Emitter {
 
     const { player, rejoined } = state.joinPlayer(msg.clientId, msg.name, { isOwner: session.isOwner });
     session.playerId = player.id;
+    console.info(`[birre] ${player.name} ${rejoined ? 'rientra' : 'entra'} con ${player.beer} (${state.beerPool.length} libere)`);
     link.send({ t: MSG.WELCOME, playerId: player.id, mode: this.mode, roomCode: state.roomCode, rejoined });
     this.#broadcastState();
     this.emit('player-joined', player, rejoined);
@@ -157,7 +159,11 @@ export class HostCore extends Emitter {
         this.requestSpin(session.playerId, msg.force);
         break;
       case MSG.AVATAR_PICK: {
+        const before = this.state.getPlayer(session.playerId)?.beer;
         const outcome = this.state.setBeer(session.playerId, msg.beerId);
+        if (outcome === 'ok' && before !== msg.beerId) {
+          console.info(`[birre] ${this.state.getPlayer(session.playerId).name} cambia ${before} → ${msg.beerId} (${before} torna nel pool)`);
+        }
         if (outcome === 'taken') session.link.send({ t: MSG.TOAST, text: `${getBeer(msg.beerId).name} è già di un altro giocatore` });
         if (outcome === 'ok') {
           this.#broadcastState();
@@ -179,7 +185,9 @@ export class HostCore extends Emitter {
     const stillConnected = [...this.sessions].some((s) => s.playerId === session.playerId);
     if (stillConnected) return;
 
-    const player = this.state.setConnected(session.playerId, false);
+    // La birra del giocatore torna nel pool: potrà essere assegnata a chi entra dopo
+    const player = this.state.disconnectPlayer(session.playerId);
+    if (player) console.info(`[birre] ${player.name} disconnesso: ${player.lastBeer} torna nel pool (${this.state.beerPool.length} libere)`);
     this.#broadcastState();
     this.emit('player-left', player);
 

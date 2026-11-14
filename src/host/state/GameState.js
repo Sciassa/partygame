@@ -16,8 +16,16 @@ export class GameState {
     this.mode = mode;
     this.roomCode = roomCode;
     this.phase = PHASE.IDLE;
-    /** @type {Array<{id:string, clientId:string, name:string, beer:string, color:string, coins:number, connected:boolean, isOwner:boolean}>} */
+    /** @type {Array<{id:string, clientId:string, name:string, beer:string|null, lastBeer:string|null, color:string, coins:number, connected:boolean, isOwner:boolean}>} */
     this.players = [];
+    /**
+     * POOL DELLE BIRRE DISPONIBILI (stato globale dell'host).
+     * Parte con tutte e 12. Regola: una birra è o nel pool o addosso a UN SOLO giocatore connesso.
+     *  - entra un giocatore     → estrazione casuale dal pool (e rimozione)
+     *  - esce un giocatore      → la sua birra torna nel pool
+     *  - cambio birra volontario → la vecchia torna nel pool, la nuova ne esce
+     */
+    this.beerPool = BEERS.map((b) => b.id);
     this.turnPlayerId = null;
     this.segments = createBaseSegments();
     this.wheelAngle = 0;
@@ -36,8 +44,9 @@ export class GameState {
     return this.players.find((p) => p.id === id) ?? null;
   }
 
+  /** Stanza piena = 12 giocatori CONNESSI (le birre sono 12: una a testa). */
   isFull() {
-    return this.players.length >= MAX_PLAYERS;
+    return this.connectedPlayers().length >= MAX_PLAYERS;
   }
 
   /** Nuovo giocatore oppure rientro di uno esistente (stesso clientId). */
@@ -47,35 +56,44 @@ export class GameState {
     if (player) {
       player.name = name;
       player.connected = true;
+      // Rientro: riprende la sua vecchia birra se è ancora nel pool, altrimenti una nuova a caso
+      if (!player.beer) this.#assignBeer(player, this.#takeBeer(player.lastBeer));
       return { player, rejoined: true };
     }
     const n = this.nextPlayerNumber++;
-    const beer = this.#randomFreeBeer();
     player = {
       id: `p${n}`,
       clientId,
       name,
-      beer: beer.id,
-      color: beer.accent, // il colore del giocatore è quello della sua birra
+      beer: null,
+      lastBeer: null,
+      color: '#f4ead5',
       coins: STARTING_COINS,
       connected: true,
       isOwner,
     };
+    this.#assignBeer(player, this.#takeBeer());
     this.players.push(player);
     if (!this.turnPlayerId) this.turnPlayerId = player.id;
     return { player, rejoined: false };
   }
 
-  setConnected(playerId, connected) {
+  /** Disconnessione: il giocatore resta (monete, posto in classifica) ma la birra torna nel pool. */
+  disconnectPlayer(playerId) {
     const player = this.getPlayer(playerId);
-    if (player) player.connected = connected;
+    if (!player) return null;
+    player.connected = false;
+    if (player.beer) {
+      this.#releaseBeer(player.beer);
+      player.lastBeer = player.beer; // preferenza per quando rientra
+      player.beer = null;
+    }
     return player;
   }
 
-  /** Birre non ancora prese da nessuno (anche da giocatori momentaneamente disconnessi). */
+  /** Birre ancora nel pool (copia). */
   freeBeers() {
-    const taken = new Set(this.players.map((p) => p.beer));
-    return BEERS.filter((b) => !taken.has(b.id));
+    return [...this.beerPool];
   }
 
   /**
@@ -84,18 +102,31 @@ export class GameState {
    */
   setBeer(playerId, beerId) {
     const player = this.getPlayer(playerId);
-    if (!player || !isBeerId(beerId)) return 'invalid';
+    if (!player || !player.connected || !isBeerId(beerId)) return 'invalid';
     if (player.beer === beerId) return 'ok';
-    if (this.players.some((p) => p.id !== playerId && p.beer === beerId)) return 'taken';
-    player.beer = beerId;
-    player.color = getBeer(beerId).accent;
+    if (!this.beerPool.includes(beerId)) return 'taken';
+    this.#releaseBeer(player.beer);
+    this.#assignBeer(player, this.#takeBeer(beerId));
     return 'ok';
   }
 
-  #randomFreeBeer() {
-    const free = this.freeBeers();
-    // MAX_PLAYERS === BEERS.length, quindi c'è sempre una birra libera
-    return free.length ? free[randomInt(0, free.length - 1)] : BEERS[randomInt(0, BEERS.length - 1)];
+  /**
+   * Toglie una birra dal pool: quella preferita se c'è, altrimenti una a caso tra le rimaste.
+   * Non pesca MAI fuori dal pool: se è vuoto è un errore di logica (isFull() lo impedisce).
+   */
+  #takeBeer(preferred = null) {
+    if (!this.beerPool.length) throw new Error('Pool delle birre vuoto: stanza piena');
+    const index = preferred && this.beerPool.includes(preferred) ? this.beerPool.indexOf(preferred) : randomInt(0, this.beerPool.length - 1);
+    return this.beerPool.splice(index, 1)[0];
+  }
+
+  #releaseBeer(beerId) {
+    if (beerId && !this.beerPool.includes(beerId)) this.beerPool.push(beerId);
+  }
+
+  #assignBeer(player, beerId) {
+    player.beer = beerId;
+    player.color = getBeer(beerId).accent; // il colore del giocatore è quello della sua birra
   }
 
   connectedPlayers() {
@@ -147,7 +178,7 @@ export class GameState {
       mode: this.mode,
       roomCode: this.roomCode,
       phase: this.phase,
-      players: this.players.map(({ clientId: _secret, ...pub }) => pub),
+      players: this.players.map(({ clientId: _secret, lastBeer: _last, ...pub }) => pub),
       turnPlayerId: this.turnPlayerId,
       wheel: { segments: this.segments, angle: this.wheelAngle },
       spin: this.spin ? { plan: this.spin.plan, elapsed: now - this.spin.startedAt, playerId: this.spin.playerId } : null,

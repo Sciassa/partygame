@@ -89,10 +89,15 @@ Con un passo di Eulero dentro `requestAnimationFrame`, una TV a 60 Hz e un telef
 
 ### Avatar: le birre
 
-`shared/avatars/beers.js` definisce 12 birre: Lager, IPA, Stout, Weiss, Pilsner, Red Ale, Sour, Bock, NEIPA, Porter, Blanche, Barley Wine. Ognuna ha il colore del liquido, quello della schiuma, la forma del bicchiere e un colore "identità" per la UI. Le birre sono uniche nella stanza (12 birre per 12 posti).
+`shared/avatars/beers.js` definisce 12 birre: Lager, IPA, Stout, Weiss, Pilsner, Red Ale, Sour, Bock, NEIPA, Porter, Blanche, Barley Wine. Ognuna ha il colore del liquido, quello della schiuma, la forma del bicchiere e un colore "identità" per la UI. Ogni birra è **unica** nella stanza. L'host tiene un **pool delle birre disponibili** (`GameState.beerPool`, all'inizio tutte e 12):
+
+- quando un giocatore entra, l'host estrae una birra a caso **solo dal pool** e la rimuove;
+- quando un giocatore si disconnette, la sua birra **torna nel pool** e può andare a un nuovo arrivato. Il giocatore resta in classifica con monete e posto, e sul bancone diventa un bicchiere vuoto;
+- quando rientra, riprende la sua vecchia birra se è ancora libera, altrimenti ne pesca un'altra dal pool;
+- la stanza è piena con 12 giocatori **connessi**, uno per birra.
 
 - Chi entra riceve una birra libera **a caso**. Al primo ingresso il telefono propone il selettore; la birra si può cambiare in ogni momento toccando il proprio nome (`avatar:pick { beerId }`, l'host verifica che sia libera).
-- Sul palco 3D ogni giocatore è un bicchiere "designer toy" (LatheGeometry, faccina, schiuma) che atterra sul bancone con un rimbalzo elastico. Chi è di turno saltella con un anello luminoso, chi si disconnette sbiadisce e crolla di lato, chi vince monete fa una giravolta.
+- Sul palco 3D ogni giocatore è un bicchiere "designer toy" fatto di primitive (cilindri, sfere, torus): liquido sfumato, schiuma a sbuffi che deborda con una goccia, faccina che atterra sul bancone con un rimbalzo elastico. Chi è di turno saltella con un anello luminoso, chi si disconnette sbiadisce e crolla di lato, chi vince monete fa una giravolta.
 - È un placeholder procedurale: `BeerAvatar` ha un'API minima (`setBeer`, `setDimmed`, `dispose`), così si può sostituire con modelli GLB senza toccare il resto.
 
 ### Robustezza di rete
@@ -110,9 +115,16 @@ Con un passo di Eulero dentro `requestAnimationFrame`, una TV a 60 Hz e un telef
 - Un aggiornamento non viene attivato a metà partita: la home mostra "Aggiorna".
 - Lo schermo resta acceso con la Wake Lock API. Su Android, nel browser, si passa a schermo intero al primo tap.
 
+### Look "vinyl toy" e luci
+
+- **Materiali** (`shared/stage/vinyl.js`): MeshStandardMaterial con metalness 0 e roughness alta, più una luce di taglio ambra calcolata nello shader (Fresnel) che accende sempre le sagome dal lato della luce.
+- **Luci** (`shared/stage/PubSet.js`): faretto ambra principale, due controluce arancio radenti, fill freddo debolissimo, neon rosa e teal, environment map da studio.
+- **Ombre:** solo in qualità alta, dal faretto, con `PCFShadowMap` e `shadow.radius` (penombra larga). In three r187 `PCFSoftShadowMap` è stato rimosso e ripiega su PCF con un avviso. Sotto ogni bicchiere c'è anche un'ombra di contatto sfumata, che resta attiva sui telefoni.
+- **60 fps:** se la media scende sotto 50 fps, `StageRenderer` toglie nell'ordine ombre, bloom e risoluzione.
+
 ## Deploy
 
-Il workflow `.github/workflows/deploy.yml` esegue la build e pubblica su GitHub Pages a ogni push su `main`. Prima va attivato una volta da **Settings → Pages → Source: GitHub Actions**. La configurazione `base: './'` funziona sia su `utente.github.io/partygame/` sia su un dominio custom.
+Il workflow `.github/workflows/deploy.yml` esegue la build e pubblica su GitHub Pages a ogni push sul **branch di default** del repo, perché l'ambiente `github-pages` accetta deploy solo da lì. Non serve nessun server: GitHub Pages ospita i file statici e il signaling passa dal cloud pubblico di PeerJS. La configurazione `base: './'` funziona sia su `utente.github.io/partygame/` sia su un dominio custom.
 
 ## Limiti noti
 

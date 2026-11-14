@@ -41,14 +41,18 @@ export class StageRenderer extends Emitter {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     // Tone mapping "cinematografico": alte luci morbide, neri profondi
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.toneMappingExposure = 1.1;
+    // Ombre morbide: in three r187 PCFSoftShadowMap è stato rimosso (ripiega su PCF con un avviso);
+    // PCFShadowMap + shadow.radius (campionamento a disco di Vogel) dà la penombra larga.
+    this.renderer.shadowMap.enabled = quality === 'high';
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.classList.add('wheel-canvas');
     this.renderer.domElement.addEventListener('webglcontextlost', (e) => e.preventDefault());
     container.append(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(30, 1, 0.1, 80);
-    this.pub = buildPubSet(this.renderer, this.scene);
+    this.pub = buildPubSet(this.renderer, this.scene, { shadows: quality === 'high' });
 
     this.wheel = new WheelModel({
       textureSize: quality === 'high' ? 2048 : 1024,
@@ -220,12 +224,18 @@ export class StageRenderer extends Emitter {
     perf.fps = perf.frames / perf.acc;
     perf.frames = 0;
     perf.acc = 0;
-    if (this.debugEl) this.debugEl.textContent = `${perf.fps.toFixed(0)} fps · ${this.composer ? 'bloom' : 'no-bloom'} · dpr ${this.renderer.getPixelRatio()}`;
+    if (this.debugEl) {
+      const shadows = this.pub.key.castShadow ? 'ombre' : 'no-ombre';
+      this.debugEl.textContent = `${perf.fps.toFixed(0)} fps · ${shadows} · ${this.composer ? 'bloom' : 'no-bloom'} · dpr ${this.renderer.getPixelRatio()}`;
+    }
     if (document.visibilityState !== 'visible') return;
     perf.slowWindows = perf.fps < 50 ? perf.slowWindows + 1 : 0;
     if (perf.slowWindows < 2) return;
     perf.slowWindows = 0;
-    if (this.composer) {
+    if (this.pub.key.castShadow) {
+      console.info('[stage] fps bassi: disattivo le ombre');
+      this.pub.key.castShadow = false;
+    } else if (this.composer) {
       console.info('[stage] fps bassi: disattivo il bloom');
       this.composer.dispose();
       this.composer = null;

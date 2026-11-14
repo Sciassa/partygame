@@ -1,57 +1,62 @@
 import * as THREE from 'three';
 import { getBeer } from './beers.js';
+import { vinylMaterial } from '../stage/vinyl.js';
 
 /**
- * Avatar 3D "designer toy": un bicchiere di birra con faccina.
- * Placeholder procedurale (LatheGeometry), pensato per essere sostituito da modelli GLB
- * mantenendo la stessa API: new BeerAvatar(beerId) → .root (Group), .setBeer(), .setDimmed(), .dispose()
+ * Avatar 3D "designer toy": un bicchiere di birra colmo, costruito con primitive
+ * (cilindri, sfere, torus), materiali vinile opachi e una faccina.
  *
- * Unità: il bicchiere è alto ~1.3 con origine alla base (y = 0), centrato su x/z.
+ * API minima (sostituibile in futuro con modelli GLB senza toccare il resto):
+ *   new BeerAvatar(beerId | null) → .root, .body, .height, .setBeer(), .setDimmed(), .dispose()
+ * beerId null = bicchiere vuoto (giocatore disconnesso: la sua birra è tornata nel pool).
+ *
+ * Unità: origine alla base del bicchiere (y = 0), alto ~1.2–1.5.
  */
 
 /**
- * Profili dei bicchieri: punti [raggio, altezza] dalla base al bordo (rivoluzione attorno a Y).
- *  - liquidFrom: altezza dove inizia la coppa (sopra lo stelo, nei calici)
- *  - fill:       altezza del liquido, come frazione dell'altezza del bicchiere
- *  - handle:     boccale con manico
+ * Forme dei bicchieri.
+ *  kind 'cup':  corpo cilindrico (raggio basso rb, alto rt, altezza h), eventuale piede/rigonfiamento
+ *  kind 'bowl': calice a coppa sferica su stelo
  */
-export const GLASS_PROFILES = {
-  shaker: { points: [[0, 0], [0.3, 0], [0.31, 0.05], [0.4, 1.28], [0.41, 1.3]], liquidFrom: 0.06, fill: 0.78 },
-  nonic: { points: [[0, 0], [0.31, 0], [0.32, 0.05], [0.37, 0.92], [0.43, 1.06], [0.4, 1.22], [0.4, 1.28]], liquidFrom: 0.06, fill: 0.8 },
-  weizen: { points: [[0, 0], [0.25, 0], [0.25, 0.07], [0.19, 0.38], [0.27, 0.95], [0.35, 1.35], [0.33, 1.6]], liquidFrom: 0.08, fill: 0.78 },
-  pilsner: { points: [[0, 0], [0.27, 0], [0.27, 0.07], [0.15, 0.16], [0.21, 0.6], [0.36, 1.48]], liquidFrom: 0.17, fill: 0.8 },
-  tulip: { points: [[0, 0], [0.3, 0], [0.3, 0.04], [0.07, 0.09], [0.07, 0.3], [0.27, 0.46], [0.4, 0.78], [0.33, 1.08], [0.37, 1.24]], liquidFrom: 0.33, fill: 0.78 },
-  snifter: { points: [[0, 0], [0.28, 0], [0.28, 0.04], [0.06, 0.09], [0.06, 0.3], [0.33, 0.45], [0.46, 0.72], [0.4, 0.98], [0.32, 1.1]], liquidFrom: 0.32, fill: 0.72 },
-  mug: { points: [[0, 0], [0.42, 0], [0.44, 0.05], [0.44, 1.04], [0.45, 1.08]], liquidFrom: 0.08, fill: 0.8, handle: true },
-  stange: { points: [[0, 0], [0.23, 0], [0.24, 0.05], [0.26, 1.45], [0.27, 1.48]], liquidFrom: 0.06, fill: 0.8 },
-  tumbler: { points: [[0, 0], [0.35, 0], [0.36, 0.05], [0.45, 0.92], [0.46, 0.95]], liquidFrom: 0.06, fill: 0.78 },
+export const GLASS_SHAPES = {
+  shaker: { kind: 'cup', rb: 0.3, rt: 0.39, h: 1.05 },
+  nonic: { kind: 'cup', rb: 0.3, rt: 0.36, h: 1.05, bulge: 0.82 },
+  weizen: { kind: 'cup', rb: 0.21, rt: 0.34, h: 1.32 },
+  pilsner: { kind: 'cup', rb: 0.16, rt: 0.33, h: 1.18, foot: true },
+  stange: { kind: 'cup', rb: 0.24, rt: 0.26, h: 1.3 },
+  tumbler: { kind: 'cup', rb: 0.33, rt: 0.41, h: 0.88 },
+  mug: { kind: 'cup', rb: 0.4, rt: 0.4, h: 0.95, handle: true },
+  tulip: { kind: 'bowl', r: 0.38, stem: 0.32, mouth: 0.3, lip: 0.14 },
+  snifter: { kind: 'bowl', r: 0.44, stem: 0.26, mouth: 0.27, lip: 0.05 },
 };
 
-const GLASS_THICKNESS = 0.9; // il liquido è il 90% del raggio interno: si vede il vetro attorno
-
-/** Raggio del profilo a una certa altezza (interpolazione lineare sui tratti ascendenti). */
-function radiusAt(points, y) {
-  let r = 0;
-  for (let i = 0; i < points.length - 1; i++) {
-    const [r0, y0] = points[i];
-    const [r1, y1] = points[i + 1];
-    if (y1 > y0 && y >= y0 && y <= y1) r = r0 + ((r1 - r0) * (y - y0)) / (y1 - y0);
-  }
-  return r;
-}
-
-function heightOf(points) {
-  return points[points.length - 1][1];
-}
+const BASE_T = 0.1; // spessore del fondo di vetro
+const SEG = 40;
 
 function luminance(hex) {
   const c = new THREE.Color(hex);
   return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 }
 
+/** Colori per vertice lungo Y: liquido più scuro e saturo sul fondo, più chiaro verso la schiuma. */
+function paintGradient(geometry, bottomColor, topColor) {
+  geometry.computeBoundingBox();
+  const { min, max } = geometry.boundingBox;
+  const pos = geometry.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const k = (pos.getY(i) - min.y) / Math.max(1e-6, max.y - min.y);
+    c.copy(bottomColor).lerp(topColor, k ** 0.8);
+    c.toArray(colors, i * 3);
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return geometry;
+}
+
 export class BeerAvatar {
   root = new THREE.Group(); // posizionato/animato da AvatarLineup
-  body = new THREE.Group(); // contenuto (si può "squashare" senza toccare root)
+  body = new THREE.Group(); // contenuto (squash & stretch senza toccare root)
   #materials = [];
   #geometries = [];
 
@@ -64,117 +69,25 @@ export class BeerAvatar {
     return this._height ?? 1.3;
   }
 
-  /** Ricostruisce il bicchiere per un'altra birra (forma e colori). */
   setBeer(beerId) {
-    if (this.beerId === beerId) return;
+    if (this.beerId === beerId && this.body.children.length) return;
     this.beerId = beerId;
     this.#clear();
-    const beer = getBeer(beerId);
-    const profile = GLASS_PROFILES[beer.glass] ?? GLASS_PROFILES.shaker;
-    const pts = profile.points;
-    const H = heightOf(pts);
-    this._height = H;
-
-    // --- vetro: guscio satinato semi-trasparente
-    const glassMat = this.#mat(
-      new THREE.MeshStandardMaterial({
-        color: 0xdfe8f2,
-        roughness: 0.3,
-        metalness: 0,
-        transparent: true,
-        opacity: 0.22,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      }),
-    );
-    const glass = new THREE.Mesh(this.#geo(new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), 40)), glassMat);
-    glass.renderOrder = 2;
-
-    // --- liquido: solido opaco dal fondo della coppa al livello di riempimento
-    const yBottom = profile.liquidFrom + 0.02;
-    const yTop = H * profile.fill;
-    const liquidPts = [new THREE.Vector2(0, yBottom)];
-    const steps = 14;
-    for (let i = 0; i <= steps; i++) {
-      const y = yBottom + ((yTop - yBottom) * i) / steps;
-      liquidPts.push(new THREE.Vector2(radiusAt(pts, y) * GLASS_THICKNESS, y));
-    }
-    liquidPts.push(new THREE.Vector2(0, yTop));
-    const liquidMat = this.#mat(
-      new THREE.MeshStandardMaterial({ color: beer.liquid, roughness: 0.42, metalness: 0, emissive: beer.liquid, emissiveIntensity: 0.18 }),
-    );
-    const liquid = new THREE.Mesh(this.#geo(new THREE.LatheGeometry(liquidPts, 40)), liquidMat);
-
-    // --- schiuma: cupola morbida che deborda un po' dal bordo + qualche "bolla" per l'effetto toy
-    const rTop = radiusAt(pts, yTop) * GLASS_THICKNESS;
-    const rRim = Math.max(radiusAt(pts, H - 0.001), rTop);
-    const foamTop = Math.max(H + 0.12, yTop + 0.3);
-    const foamPts = [
-      [0, yTop],
-      [rTop, yTop],
-      [rRim * 1.02, H - 0.02],
-      [rRim * 1.08, H + 0.03],
-      [rRim * 0.95, foamTop - 0.08],
-      [rRim * 0.6, foamTop - 0.01],
-      [0, foamTop],
-    ].map(([r, y]) => new THREE.Vector2(r, y));
-    const foamMat = this.#mat(new THREE.MeshStandardMaterial({ color: beer.foam, roughness: 0.95, metalness: 0 }));
-    const foam = new THREE.Mesh(this.#geo(new THREE.LatheGeometry(foamPts, 40)), foamMat);
-    const bubbleGeo = this.#geo(new THREE.SphereGeometry(1, 16, 12));
-    for (const [x, z, r] of [[-0.18, 0.08, 0.13], [0.16, -0.06, 0.15], [0.02, 0.16, 0.1]]) {
-      const bubble = new THREE.Mesh(bubbleGeo, foamMat);
-      bubble.scale.setScalar(r * (rRim / 0.4));
-      bubble.position.set(x * (rRim / 0.4), foamTop - 0.06, z * (rRim / 0.4));
-      foam.add(bubble);
-    }
-
-    this.body.add(liquid, foam, glass);
-
-    // --- boccale: manico
-    if (profile.handle) {
-      const handle = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(0.25, 0.06, 10, 24, Math.PI)), glassMat);
-      handle.rotation.z = -Math.PI / 2;
-      handle.position.set(rRim + 0.02, H * 0.52, 0);
-      this.body.add(handle);
-    }
-
-    // --- faccina sul davanti del liquido (verso +Z, cioè la camera)
-    const faceY = yBottom + (yTop - yBottom) * 0.58;
-    const faceR = radiusAt(pts, faceY) * GLASS_THICKNESS;
-    const eyeColor = luminance(beer.liquid) < 0.12 ? 0xf4ead5 : 0x140c08;
-    const eyeMat = this.#mat(new THREE.MeshStandardMaterial({ color: eyeColor, roughness: 0.4, metalness: 0 }));
-    const sparkleMat = this.#mat(new THREE.MeshBasicMaterial({ color: 0xffffff }));
-    const eyeGeo = this.#geo(new THREE.SphereGeometry(0.055, 16, 12));
-    const sparkleGeo = this.#geo(new THREE.SphereGeometry(0.016, 8, 6));
-    const eyeSpread = Math.min(0.13, faceR * 0.42);
-    for (const side of [-1, 1]) {
-      const angle = Math.asin(Math.min(0.95, (side * eyeSpread) / faceR));
-      const eye = new THREE.Mesh(eyeGeo, eyeMat);
-      eye.scale.set(1, 1.15, 0.55);
-      eye.position.set(Math.sin(angle) * faceR, faceY, Math.cos(angle) * faceR);
-      const sparkle = new THREE.Mesh(sparkleGeo, sparkleMat);
-      sparkle.position.set(0.018, 0.022, 0.05);
-      eye.add(sparkle);
-      this.body.add(eye);
-    }
-    const blushMat = this.#mat(new THREE.MeshBasicMaterial({ color: 0xff7a8a, transparent: true, opacity: 0.35, depthWrite: false }));
-    const blushGeo = this.#geo(new THREE.CircleGeometry(0.045, 16));
-    for (const side of [-1, 1]) {
-      const angle = Math.asin(Math.min(0.95, (side * eyeSpread * 1.45) / faceR));
-      const blush = new THREE.Mesh(blushGeo, blushMat);
-      blush.position.set(Math.sin(angle) * faceR * 1.005, faceY - 0.09, Math.cos(angle) * faceR * 1.005);
-      blush.rotation.y = angle;
-      this.body.add(blush);
-    }
-    const smile = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(0.06, 0.014, 8, 20, Math.PI)), eyeMat);
-    smile.rotation.z = Math.PI; // arco verso il basso = sorriso
-    smile.position.set(0, faceY - 0.075, faceR + 0.005);
-    this.body.add(smile);
-
+    const beer = beerId ? getBeer(beerId) : null;
+    const shape = GLASS_SHAPES[beer?.glass ?? 'shaker'];
+    const g = shape.kind === 'bowl' ? this.#buildBowl(shape, beer) : this.#buildCup(shape, beer);
+    this._height = g.foamTop;
+    this.#buildFace(g, beer);
+    this.body.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = !o.material.transparent;
+        o.receiveShadow = true;
+      }
+    });
     this.#applyDim();
   }
 
-  /** Giocatore disconnesso: bicchiere sbiadito (l'animazione "ubriaca" la fa AvatarLineup). */
+  /** Giocatore disconnesso: tutto sbiadito (l'inclinazione la fa AvatarLineup). */
   setDimmed(dimmed) {
     if (this.dimmed === dimmed) return;
     this.dimmed = dimmed;
@@ -185,12 +98,291 @@ export class BeerAvatar {
     this.#clear();
   }
 
+  // ------------------------------------------------------------------ materiali
+
+  #glassMaterial() {
+    return this.#mat(
+      vinylMaterial({
+        color: 0xe9f1f8,
+        roughness: 0.32,
+        transparent: true,
+        opacity: 0.13,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        rimStrength: 1.6,
+        rimPower: 2.0,
+      }),
+    );
+  }
+
+  #frostMaterial() {
+    // fondo spesso e bordo: vetro "smerigliato" più pieno
+    return this.#mat(vinylMaterial({ color: 0xdfe9f2, roughness: 0.45, transparent: true, opacity: 0.42, rimStrength: 1.2 }));
+  }
+
+  #liquidMaterial(beer) {
+    return this.#mat(
+      vinylMaterial({
+        vertexColors: true,
+        roughness: 0.62,
+        emissive: beer.liquid,
+        emissiveIntensity: 0.2,
+        rimStrength: 0.7,
+      }),
+    );
+  }
+
+  #foamMaterial(beer) {
+    return this.#mat(vinylMaterial({ color: beer.foam, roughness: 0.92, rimStrength: 0.9, rimPower: 2.2 }));
+  }
+
+  #liquidGeometry(geometry, beer) {
+    const base = new THREE.Color(beer.liquid);
+    const deep = base.clone().multiplyScalar(0.55);
+    const light = base.clone().lerp(new THREE.Color(0xffffff), 0.18);
+    return paintGradient(geometry, deep, light);
+  }
+
+  // ------------------------------------------------------------------ bicchieri
+
+  /** Pinta, nonic, weizen, pilsner, stange, tumbler, boccale. */
+  #buildCup(shape, beer) {
+    const { rb, rt, h } = shape;
+    const glassMat = this.#glassMaterial();
+    const frostMat = this.#frostMaterial();
+    let y0 = 0;
+
+    if (shape.foot) {
+      const foot = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(0.27, 0.29, 0.07, SEG)), frostMat);
+      foot.position.y = 0.035;
+      this.body.add(foot);
+      y0 = 0.07;
+    }
+
+    const bottom = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(rb * 1.02, rb * 1.05, BASE_T, SEG)), frostMat);
+    bottom.position.y = y0 + BASE_T / 2;
+    this.body.add(bottom);
+
+    const wall = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(rt, rb, h, SEG, 1, true)), glassMat);
+    wall.position.y = y0 + h / 2;
+    wall.renderOrder = 2;
+    this.body.add(wall);
+
+    const rimY = y0 + h;
+    const rim = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(rt, 0.028, 10, SEG)), frostMat);
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = rimY;
+    this.body.add(rim);
+
+    const radiusAt = (y) => rb + ((rt - rb) * (y - y0)) / h;
+
+    if (shape.bulge) {
+      // il "gradino" della nonic
+      const ring = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(radiusAt(y0 + h * shape.bulge) + 0.02, 0.035, 10, SEG)), frostMat);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = y0 + h * shape.bulge;
+      this.body.add(ring);
+    }
+    if (shape.handle) {
+      const handle = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(0.26, 0.065, 12, 28, Math.PI * 1.15)), frostMat);
+      handle.rotation.z = -Math.PI / 2 - 0.23;
+      handle.position.set(rt + 0.02, y0 + h * 0.52, 0);
+      this.body.add(handle);
+    }
+
+    // liquido: cilindro pieno leggermente più stretto del vetro
+    const liquidBottom = y0 + BASE_T;
+    const liquidTop = rimY - 0.04;
+    if (beer) {
+      const lh = liquidTop - liquidBottom;
+      const liquidGeo = this.#liquidGeometry(
+        new THREE.CylinderGeometry(radiusAt(liquidTop) * 0.92, radiusAt(liquidBottom) * 0.92, lh, SEG),
+        beer,
+      );
+      const liquid = new THREE.Mesh(this.#geo(liquidGeo), this.#liquidMaterial(beer));
+      liquid.position.y = liquidBottom + lh / 2;
+      this.body.add(liquid);
+      this.#addBubbles(beer, radiusAt(liquidTop) * 0.8, liquidBottom + 0.15, liquidTop - 0.05);
+    }
+
+    const foamTop = beer ? this.#buildFoam(beer, rt, rimY) : rimY;
+    return { kind: 'cup', faceY: y0 + h * 0.48, faceR: radiusAt(y0 + h * 0.48), foamTop, rimY, rt };
+  }
+
+  /** Tulipano e ballon: piede + stelo + coppa sferica. */
+  #buildBowl(shape, beer) {
+    const { r, stem, mouth, lip } = shape;
+    const glassMat = this.#glassMaterial();
+    const frostMat = this.#frostMaterial();
+
+    const foot = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(0.26, 0.29, 0.06, SEG)), frostMat);
+    foot.position.y = 0.03;
+    const stemMesh = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(0.055, 0.075, stem, 16)), frostMat);
+    stemMesh.position.y = 0.06 + stem / 2;
+    this.body.add(foot, stemMesh);
+
+    // coppa: sfera aperta in alto dove il raggio scende a `mouth`
+    const cy = 0.06 + stem + r * 0.92; // centro della sfera
+    const thetaMouth = Math.asin(Math.min(0.99, mouth / r)); // angolo dall'asse +Y
+    const bowl = new THREE.Mesh(this.#geo(new THREE.SphereGeometry(r, SEG, 24, 0, Math.PI * 2, thetaMouth, Math.PI - thetaMouth)), glassMat);
+    bowl.position.y = cy;
+    bowl.renderOrder = 2;
+    this.body.add(bowl);
+
+    let rimY = cy + Math.cos(thetaMouth) * r;
+    let rimR = mouth;
+    if (lip > 0) {
+      // labbro svasato del tulipano
+      const lipMesh = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(mouth * 1.18, mouth, lip, SEG, 1, true)), glassMat);
+      lipMesh.position.y = rimY + lip / 2;
+      lipMesh.renderOrder = 2;
+      this.body.add(lipMesh);
+      rimY += lip;
+      rimR = mouth * 1.18;
+    }
+    const rim = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(rimR, 0.026, 10, SEG)), frostMat);
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = rimY;
+    this.body.add(rim);
+
+    if (beer) {
+      // liquido: sfera più piccola tagliata al livello di riempimento + tappo piatto
+      const lr = r * 0.92;
+      const fillY = Math.cos(thetaMouth) * r * 0.98; // quasi alla bocca
+      const thetaFill = Math.acos(Math.min(0.99, fillY / lr));
+      const liquidGeo = this.#liquidGeometry(new THREE.SphereGeometry(lr, SEG, 20, 0, Math.PI * 2, thetaFill, Math.PI - thetaFill), beer);
+      const liquid = new THREE.Mesh(this.#geo(liquidGeo), this.#liquidMaterial(beer));
+      liquid.position.y = cy;
+      const capMat = this.#mat(vinylMaterial({ color: new THREE.Color(beer.liquid).lerp(new THREE.Color(0xffffff), 0.18), roughness: 0.62 }));
+      const cap = new THREE.Mesh(this.#geo(new THREE.CircleGeometry(Math.sin(thetaFill) * lr, SEG)), capMat);
+      cap.rotation.x = -Math.PI / 2;
+      cap.position.y = cy + fillY;
+      this.body.add(liquid, cap);
+      this.#addBubbles(beer, lr * 0.55, cy - lr * 0.4, cy + fillY - 0.05);
+    }
+
+    const foamTop = beer ? this.#buildFoam(beer, rimR, rimY) : rimY;
+    return { kind: 'bowl', faceY: cy - r * 0.05, faceR: r, foamTop, rimY, rt: rimR };
+  }
+
+  /**
+   * Schiuma da toy: collare che deborda dal bordo, cupola, sbuffi tondi e una goccia
+   * che cola sul davanti a destra.
+   */
+  #buildFoam(beer, rimR, rimY) {
+    const foamMat = this.#foamMaterial(beer);
+    const foam = new THREE.Group();
+    const s = rimR / 0.38; // scala sulla bocca del bicchiere
+
+    const collar = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(rimR * 0.98, 0.085 * s, 14, SEG)), foamMat);
+    collar.rotation.x = Math.PI / 2;
+    collar.position.y = rimY + 0.03;
+    foam.add(collar);
+
+    const dome = new THREE.Mesh(this.#geo(new THREE.SphereGeometry(rimR * 0.98, SEG, 14, 0, Math.PI * 2, 0, Math.PI / 2)), foamMat);
+    dome.scale.y = 0.55;
+    dome.position.y = rimY + 0.03;
+    foam.add(dome);
+
+    const puffGeo = this.#geo(new THREE.SphereGeometry(1, 20, 14));
+    const puffs = [
+      [-0.17, 0.14, 0.06, 0.15],
+      [0.15, 0.16, -0.04, 0.17],
+      [0.0, 0.24, 0.02, 0.15],
+      [-0.05, 0.12, -0.18, 0.13],
+      [0.19, 0.08, 0.15, 0.11],
+    ];
+    for (const [x, y, z, r] of puffs) {
+      const puff = new THREE.Mesh(puffGeo, foamMat);
+      puff.scale.setScalar(r * s);
+      puff.position.set(x * s, rimY + y * s, z * s);
+      foam.add(puff);
+    }
+
+    // goccia di schiuma che cola fuori dal bicchiere
+    const drip = new THREE.Mesh(this.#geo(new THREE.CapsuleGeometry(0.045 * s, 0.14 * s, 6, 12)), foamMat);
+    const a = Math.PI * 0.32;
+    drip.position.set(Math.sin(a) * (rimR + 0.02), rimY - 0.07 * s, Math.cos(a) * (rimR + 0.02));
+    foam.add(drip);
+
+    this.body.add(foam);
+    return rimY + 0.36 * s;
+  }
+
+  /** Bollicine chiare dentro il liquido (vista attraverso il vetro). */
+  #addBubbles(beer, spread, yMin, yMax) {
+    const mat = this.#mat(vinylMaterial({ color: new THREE.Color(beer.liquid).lerp(new THREE.Color(0xffffff), 0.6), roughness: 0.4, rimStrength: 0.4 }));
+    const geo = this.#geo(new THREE.SphereGeometry(0.028, 8, 6));
+    const seed = [...beer.id].reduce((a, ch) => a + ch.charCodeAt(0), 0);
+    for (let i = 0; i < 5; i++) {
+      const t = ((seed * (i + 3)) % 97) / 97;
+      const ang = ((seed * (i + 7)) % 360) * (Math.PI / 180);
+      const b = new THREE.Mesh(geo, mat);
+      b.position.set(Math.cos(ang) * spread * 0.9, yMin + (yMax - yMin) * t, Math.abs(Math.sin(ang)) * spread * 0.9 + 0.02);
+      this.body.add(b);
+    }
+  }
+
+  // ------------------------------------------------------------------ faccina
+
+  #buildFace(g, beer) {
+    const faceY = g.faceY;
+    const faceR = g.faceR + 0.012; // stampata sul vetro, davanti (+Z, verso la camera)
+    const dark = beer && luminance(beer.liquid) < 0.12;
+    const inkColor = dark ? 0xf4ead5 : 0x1a100a;
+    const ink = this.#mat(vinylMaterial({ color: inkColor, roughness: 0.25, rimStrength: 0.3 })); // occhi lucidi
+    const spread = Math.min(0.13, faceR * 0.4);
+    const onSurface = (x, y, push = 0) => {
+      const ang = Math.asin(Math.max(-0.95, Math.min(0.95, x / faceR)));
+      return new THREE.Vector3(Math.sin(ang) * (faceR + push), y, Math.cos(ang) * (faceR + push));
+    };
+
+    if (beer) {
+      const eyeGeo = this.#geo(new THREE.SphereGeometry(0.06, 18, 14));
+      const sparkleGeo = this.#geo(new THREE.SphereGeometry(0.018, 8, 6));
+      const sparkleMat = this.#mat(new THREE.MeshBasicMaterial({ color: dark ? 0x1a100a : 0xffffff }));
+      for (const side of [-1, 1]) {
+        const eye = new THREE.Mesh(eyeGeo, ink);
+        eye.scale.set(1, 1.2, 0.5);
+        eye.position.copy(onSurface(side * spread, faceY));
+        const sparkle = new THREE.Mesh(sparkleGeo, sparkleMat);
+        sparkle.position.set(0.02, 0.025, 0.05);
+        eye.add(sparkle);
+        this.body.add(eye);
+      }
+      const smile = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(0.06, 0.015, 8, 20, Math.PI)), ink);
+      smile.rotation.z = Math.PI;
+      smile.position.copy(onSurface(0, faceY - 0.085, 0.004));
+      this.body.add(smile);
+    } else {
+      // bicchiere vuoto: occhi chiusi (archetti) — "è uscito dal pub"
+      for (const side of [-1, 1]) {
+        const lid = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(0.045, 0.012, 6, 14, Math.PI)), ink);
+        lid.rotation.z = Math.PI;
+        lid.position.copy(onSurface(side * spread, faceY));
+        this.body.add(lid);
+      }
+    }
+
+    const blushMat = this.#mat(new THREE.MeshBasicMaterial({ color: 0xff7a8a, transparent: true, opacity: 0.45, depthWrite: false }));
+    const blushGeo = this.#geo(new THREE.CircleGeometry(0.042, 16));
+    for (const side of [-1, 1]) {
+      const p = onSurface(side * spread * 1.55, faceY - 0.075, 0.002);
+      const blush = new THREE.Mesh(blushGeo, blushMat);
+      blush.position.copy(p);
+      blush.rotation.y = Math.atan2(p.x, p.z);
+      this.body.add(blush);
+    }
+  }
+
+  // ------------------------------------------------------------------ util
+
   #applyDim() {
     for (const m of this.#materials) {
       m.userData.baseOpacity ??= m.opacity;
       m.userData.baseTransparent ??= m.transparent;
       m.transparent = this.dimmed ? true : m.userData.baseTransparent;
-      m.opacity = this.dimmed ? m.userData.baseOpacity * 0.35 : m.userData.baseOpacity;
+      m.opacity = this.dimmed ? m.userData.baseOpacity * 0.4 : m.userData.baseOpacity;
       m.needsUpdate = true;
     }
   }

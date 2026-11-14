@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { TAU, segmentIndexAt } from './kinematics.js';
 import { drawWheelFace } from './wheelTexture.js';
+import { enableShadows, vinylMaterial } from '../stage/vinyl.js';
 
 export const WHEEL_RADIUS = 3;
 const R = WHEEL_RADIUS;
@@ -8,9 +9,9 @@ const BULB_COUNT = 36;
 
 /** Palette materiali "pub": tutto opaco/satinato, metalness 0 (l'ottone è un colore, non un metallo). */
 const PALETTE = {
-  walnut: 0x2a1c15,
-  matteBlack: 0x14141a,
-  brass: 0xc99a4b,
+  walnut: 0x22160f,
+  matteBlack: 0x161a24, // nero-blu vinile
+  brass: 0xd4a24c, // oro opaco
   cream: 0xf4ead5,
   ruby: 0xc81d43,
   bulb: new THREE.Color('#ffb257'),
@@ -36,6 +37,10 @@ export class WheelModel {
     this.#buildRotating(anisotropy);
     this.#buildFrame();
     this.#buildPointer();
+    // ombre: la ruota proietta sul muro, puntatore e pioli proiettano sulla faccia
+    enableShadows(this.root);
+    this.bulbs.castShadow = false;
+    this.neon.castShadow = false;
   }
 
   setSegments(segments) {
@@ -123,7 +128,7 @@ export class WheelModel {
 
     const body = new THREE.Mesh(
       new THREE.CylinderGeometry(R, R * 0.97, 0.4, 96, 1),
-      new THREE.MeshStandardMaterial({ color: PALETTE.walnut, roughness: 0.75, metalness: 0 }),
+      vinylMaterial({ color: PALETTE.walnut, roughness: 0.75 }),
     );
     body.rotation.x = Math.PI / 2;
     body.position.z = -0.2;
@@ -135,14 +140,14 @@ export class WheelModel {
     this.faceTexture.anisotropy = anisotropy;
     const face = new THREE.Mesh(
       new THREE.CircleGeometry(R, 128),
-      new THREE.MeshStandardMaterial({
+      vinylMaterial({
         map: this.faceTexture,
         // un filo di emissione: i colori restano leggibili anche fuori dal fascio di luce
         emissive: 0xffffff,
         emissiveMap: this.faceTexture,
-        emissiveIntensity: 0.14,
-        roughness: 0.68,
-        metalness: 0,
+        emissiveIntensity: 0.13,
+        roughness: 0.82,
+        rimStrength: 0.15,
       }),
     );
     face.position.z = 0.001;
@@ -156,7 +161,7 @@ export class WheelModel {
     this.highlight.visible = false;
     rotating.add(this.highlight);
 
-    this.pegMaterial = new THREE.MeshStandardMaterial({ color: PALETTE.brass, roughness: 0.45, metalness: 0 });
+    this.pegMaterial = vinylMaterial({ color: PALETTE.brass, roughness: 0.45 });
     this.pegGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.22, 12);
     this.pegGeometry.rotateX(Math.PI / 2);
 
@@ -175,13 +180,13 @@ export class WheelModel {
       }
     }
     capGeo.computeVertexNormals();
-    const cap = new THREE.Mesh(capGeo, new THREE.MeshStandardMaterial({ color: PALETTE.brass, roughness: 0.5, metalness: 0 }));
+    const cap = new THREE.Mesh(capGeo, vinylMaterial({ color: PALETTE.brass, roughness: 0.5 }));
     cap.rotation.x = Math.PI / 2;
     cap.position.z = 0.12;
     rotating.add(cap);
     const capTop = new THREE.Mesh(
       new THREE.CircleGeometry(0.4, 48),
-      new THREE.MeshStandardMaterial({ color: PALETTE.ruby, roughness: 0.6, metalness: 0, emissive: PALETTE.ruby, emissiveIntensity: 0.25 }),
+      vinylMaterial({ color: PALETTE.ruby, roughness: 0.6, emissive: PALETTE.ruby, emissiveIntensity: 0.25 }),
     );
     capTop.position.z = 0.235;
     rotating.add(capTop);
@@ -190,14 +195,14 @@ export class WheelModel {
   #buildFrame() {
     const rim = new THREE.Mesh(
       new THREE.TorusGeometry(R + 0.13, 0.18, 20, 160),
-      new THREE.MeshStandardMaterial({ color: PALETTE.matteBlack, roughness: 0.8, metalness: 0 }),
+      vinylMaterial({ color: PALETTE.matteBlack, roughness: 0.72, rimStrength: 1.4, rimPower: 2.0 }),
     );
     rim.position.z = 0.02;
     this.root.add(rim);
 
     const brassRing = new THREE.Mesh(
       new THREE.TorusGeometry(R + 0.01, 0.035, 10, 160),
-      new THREE.MeshStandardMaterial({ color: PALETTE.brass, roughness: 0.4, metalness: 0 }),
+      vinylMaterial({ color: PALETTE.brass, roughness: 0.4 }),
     );
     brassRing.position.z = 0.08;
     this.root.add(brassRing);
@@ -232,10 +237,10 @@ export class WheelModel {
     shape.bezierCurveTo(-0.34, -0.25, -0.1, -0.58, 0, -0.9);
     const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.16, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.045, bevelSegments: 4 });
     geo.translate(0, 0, -0.08);
-    const body = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: PALETTE.cream, roughness: 0.55, metalness: 0 }));
+    const body = new THREE.Mesh(geo, vinylMaterial({ color: PALETTE.cream, roughness: 0.6, rimStrength: 1.3 }));
     const gem = new THREE.Mesh(
       new THREE.SphereGeometry(0.13, 24, 16),
-      new THREE.MeshStandardMaterial({ color: PALETTE.ruby, roughness: 0.35, metalness: 0, emissive: PALETTE.ruby, emissiveIntensity: 0.6 }),
+      vinylMaterial({ color: PALETTE.ruby, roughness: 0.35, emissive: PALETTE.ruby, emissiveIntensity: 0.6 }),
     );
     gem.position.set(0, 0.02, 0.15);
     this.pointerPivot = new THREE.Group();
@@ -257,6 +262,8 @@ export class WheelModel {
       m.makeTranslation(Math.cos(a) * R * 0.935, Math.sin(a) * R * 0.935, 0.11);
       pegs.setMatrixAt(i, m);
     }
+    pegs.castShadow = true;
+    pegs.receiveShadow = true;
     this.pegs = pegs;
     this.rotating.add(pegs);
   }

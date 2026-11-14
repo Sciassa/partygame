@@ -303,6 +303,11 @@ p {
   background: linear-gradient(180deg, color-mix(in srgb, var(--liquid) 80%, white), var(--liquid));
 }
 
+.beer-icon-empty {
+  opacity: 0.5;
+  border-style: dashed;
+}
+
 .beer-icon-xs { --w: 11px; --h: 16px; }
 .beer-icon-sm { --w: 18px; --h: 26px; }
 .beer-icon-lg { --w: 30px; --h: 44px; border-width: 2px; }

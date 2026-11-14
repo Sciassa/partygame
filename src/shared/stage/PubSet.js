@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { drawBrickWall, drawGlow } from '../wheel/wheelTexture.js';
+import { vinylMaterial } from './vinyl.js';
 
 /** Colori dell'ambientazione (allineati ai token CSS in styles/base.css). */
 export const PUB_COLORS = {
@@ -20,10 +21,18 @@ export const SET = Object.freeze({
 });
 
 /**
- * Il "set" del pub: muro di mattoni, bancone in legno con barra ottone e striscia LED ambra,
- * luci da studio (key calda, fill fredda, controluce) + accenti neon e environment map morbida.
+ * Il "set" del pub: muro di mattoni, bancone in legno con barra ottone e striscia LED ambra.
+ *
+ * Illuminazione "cinematic pub" (tre punti da set fotografico + accenti):
+ *  - KEY:  faretto ambra dall'alto a sinistra, l'unica luce che proietta ombre (morbide, PCF + radius)
+ *  - RIM:  due controluce arancio/ambra da dietro ai lati, che "tagliano" i bordi dei modelli
+ *          (in più il termine di Fresnel nel materiale vinile, vedi vinyl.js)
+ *  - FILL: freddo e debolissimo, solo per non perdere i neri
+ *  - neon rosa e teal fuori campo, environment map da studio per riflessi morbidi
+ *
+ * @param {{ shadows?: boolean }} opts ombre reali solo in qualità alta (TV/PC)
  */
-export function buildPubSet(renderer, scene) {
+export function buildPubSet(renderer, scene, { shadows = false } = {}) {
   const group = new THREE.Group();
   const disposables = [];
   const track = (x) => (disposables.push(x), x);
@@ -35,7 +44,7 @@ export function buildPubSet(renderer, scene) {
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envScene = new RoomEnvironment();
   scene.environment = track(pmrem.fromScene(envScene, 0.04).texture);
-  scene.environmentIntensity = 0.22;
+  scene.environmentIntensity = 0.16;
   envScene.traverse((o) => {
     o.geometry?.dispose();
     o.material?.dispose?.();
@@ -43,20 +52,32 @@ export function buildPubSet(renderer, scene) {
   pmrem.dispose();
 
   // --- Luci
-  const hemi = new THREE.HemisphereLight(0x33405c, 0x160d08, 0.5);
+  const hemi = new THREE.HemisphereLight(0x2a3550, 0x140b06, 0.38);
 
-  // Key: fascio caldo dall'alto a sinistra, come un faretto sopra il bancone
-  const key = new THREE.SpotLight(0xffd29a, 3.2, 0, 0.5, 0.85, 0);
-  key.position.set(-5, 10, 11);
-  key.target.position.set(0, -0.6, 0);
+  // KEY: faretto ambra dall'alto a sinistra, come una lampada sopra il bancone
+  const key = new THREE.SpotLight(0xffc98a, 3.4, 0, 0.46, 0.9, 0);
+  key.position.set(-5.5, 10, 10);
+  key.target.position.set(0, -0.8, 0.6);
+  if (shadows) {
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.near = 6;
+    key.shadow.camera.far = 30;
+    key.shadow.radius = 9; // penombra larga: ombre morbidissime
+    key.shadow.bias = -0.0004;
+    key.shadow.normalBias = 0.025;
+  }
 
-  // Fill: freddo e debole da destra, separa i piani senza appiattire
-  const fill = new THREE.DirectionalLight(0x8aa2ff, 0.35);
+  // RIM: controluce caldi da dietro, a sinistra (ambra) e a destra (arancio)
+  // radenti (y bassa): tagliano le sagome senza "accendere" il piano del bancone
+  const rimLeft = new THREE.DirectionalLight(0xffa64d, 2.4);
+  rimLeft.position.set(-8, 1.6, -7);
+  const rimRight = new THREE.DirectionalLight(0xff7a2e, 1.7);
+  rimRight.position.set(8, 1.2, -6);
+
+  // FILL: freddo e debole da destra
+  const fill = new THREE.DirectionalLight(0x8aa2ff, 0.28);
   fill.position.set(9, 1, 6);
-
-  // Controluce: disegna i bordi di bicchieri e cornice
-  const rim = new THREE.DirectionalLight(0xffd7a0, 1.3);
-  rim.position.set(0, 6, -9);
 
   // Accenti neon (insegne fuori campo)
   const pink = new THREE.PointLight(PUB_COLORS.neonPink, 22, 13, 2);
@@ -64,7 +85,7 @@ export function buildPubSet(renderer, scene) {
   const teal = new THREE.PointLight(PUB_COLORS.neonTeal, 16, 13, 2);
   teal.position.set(5.2, 2.6, 1.2);
 
-  group.add(hemi, key, key.target, fill, rim, pink, teal);
+  group.add(hemi, key, key.target, fill, rimLeft, rimRight, pink, teal);
 
   // --- Muro di mattoni
   const wallCanvas = document.createElement('canvas');
@@ -78,6 +99,7 @@ export function buildPubSet(renderer, scene) {
     track(new THREE.MeshStandardMaterial({ map: wallTexture, roughness: 0.95, metalness: 0 })),
   );
   wall.position.set(0, 2, SET.wallZ);
+  wall.receiveShadow = true; // l'ombra morbida della ruota sul muro dà profondità
   group.add(wall);
 
   // Alone ambra dietro la ruota (sprite additivo: costo quasi zero)
@@ -94,16 +116,17 @@ export function buildPubSet(renderer, scene) {
 
   // --- Bancone
   const depth = SET.counterFrontZ - SET.counterBackZ;
-  const wood = track(new THREE.MeshStandardMaterial({ color: 0x170d08, roughness: 0.45, metalness: 0 }));
-  const darkWood = track(new THREE.MeshStandardMaterial({ color: 0x1d120c, roughness: 0.8, metalness: 0 }));
+  const wood = track(vinylMaterial({ color: 0x1c100a, roughness: 0.55, rimStrength: 0.25 }));
+  const darkWood = track(vinylMaterial({ color: 0x150c07, roughness: 0.85, rimStrength: 0.2 }));
   const top = new THREE.Mesh(track(new THREE.BoxGeometry(60, 0.2, depth)), wood);
   top.position.set(0, SET.counterTopY - 0.1, SET.counterBackZ + depth / 2);
+  top.receiveShadow = true;
   const front = new THREE.Mesh(track(new THREE.BoxGeometry(60, 4, 0.2)), darkWood);
   front.position.set(0, SET.counterTopY - 2.2, SET.counterFrontZ - 0.15);
   // Barra in ottone (opaco) lungo il bordo
   const rail = new THREE.Mesh(
     track(new THREE.CylinderGeometry(0.07, 0.07, 60, 12)),
-    track(new THREE.MeshStandardMaterial({ color: 0xc99a4b, roughness: 0.4, metalness: 0 })),
+    track(vinylMaterial({ color: 0xd4a24c, roughness: 0.5, rimStrength: 1.0 })),
   );
   rail.rotation.z = Math.PI / 2;
   rail.position.set(0, SET.counterTopY - 0.32, SET.counterFrontZ + 0.08);
@@ -119,6 +142,7 @@ export function buildPubSet(renderer, scene) {
   return {
     group,
     glow,
+    key,
     dispose() {
       scene.remove(group);
       disposables.forEach((d) => d.dispose());

@@ -10,7 +10,8 @@ import { beerIcon } from '../../shared/ui/beerIcon.js';
  */
 export function openBeerPicker({ players, myId, onPick, firstTime = false }) {
   const me = players.find((p) => p.id === myId);
-  const owners = new Map(players.filter((p) => p.id !== myId).map((p) => [p.beer, p.name]));
+  // solo le birre addosso a giocatori connessi sono occupate (le altre sono tornate nel pool)
+  const owners = new Map(players.filter((p) => p.id !== myId && p.beer).map((p) => [p.beer, p.name]));
   const close = () => modal.remove();
 
   const grid = h(
