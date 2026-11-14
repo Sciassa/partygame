@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { BeerAvatar } from './BeerAvatar.js';
 import { PHASE } from '../protocol.js';
 
+/** Fasi in cui chi è di turno saltella e sbraccia («tocca a me!»). */
+const TURN_READY_PHASES = new Set([PHASE.SHOP, PHASE.BETTING, PHASE.AWAIT_SPIN]);
+
 const LABEL_FONT = '"Oswald", "Arial Narrow", system-ui, sans-serif';
 const TAU = Math.PI * 2;
 
@@ -55,7 +58,7 @@ export class AvatarLineup {
   #entries = new Map();
   #order = [];
   #halfWidth = 6;
-  #phase = PHASE.IDLE;
+  #phase = PHASE.LOBBY;
   #phaseSince = 0;
   #lastTick = -10;
   #ringGeo = new THREE.RingGeometry(0.42, 0.52, 48).rotateX(-Math.PI / 2);
@@ -201,13 +204,13 @@ export class AvatarLineup {
       pose.legL = -0.2 - 0.3 * (1 + Math.sin(t * 7 + s));
       pose.legR = -0.2 - 0.3 * (1 + Math.sin(t * 7 + s + Math.PI));
       pose.lift = entry.isTurn ? Math.abs(Math.sin(t * 5)) * 0.15 : 0;
-    } else if (this.#phase === PHASE.RESULT && phaseTime < 2.6) {
+    } else if (this.#phase === PHASE.LANDING && phaseTime < 2.6) {
       // applauso
       const clap = Math.sin(t * 15 + s * 0.3);
       pose.armL = { x: -1.25, z: 0.45 + clap * 0.3 };
       pose.armR = { x: -1.25, z: -0.45 - clap * 0.3 };
       pose.pitch = -0.06;
-    } else if (entry.isTurn && this.#phase === PHASE.IDLE) {
+    } else if (entry.isTurn && TURN_READY_PHASES.has(this.#phase)) {
       // "tocca a me!": saltella e sbraccia
       const hop = Math.abs(Math.sin(t * 4.4 + s));
       pose.lift = hop * 0.28;

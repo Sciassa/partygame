@@ -1,32 +1,35 @@
 import { Emitter } from '../shared/Emitter.js';
 import { CONNECTION_TIMEOUT_MS, HEARTBEAT_MS } from '../shared/config.js';
-import { MSG, PHASE, PROTOCOL_VERSION, REJECT_REASON } from '../shared/protocol.js';
-import { SEGMENT_TYPE, segmentInfo } from '../shared/wheel/segments.js';
-import { randomInt } from '../shared/util/random.js';
+import { MSG, PROTOCOL_VERSION, REJECT_REASON } from '../shared/protocol.js';
+import { randomFloat } from '../shared/util/random.js';
+import { getBeer } from '../shared/avatars/beers.js';
 import { HostPeer } from './net/HostPeer.js';
 import { GameState } from './state/GameState.js';
-import { planSpin, resolveStop } from './physics/WheelPhysics.js';
-import { getBeer } from '../shared/avatars/beers.js';
+import { GameEngine } from './game/GameEngine.js';
 
 const HELLO_TIMEOUT_MS = 8000;
-const RESULT_HOLD_MS = 4500;
-const SPIN_SETTLE_MS = 350; // margine per far finire l'animazione sui client prima del risultato
-const DISCONNECTED_TURN_GRACE_MS = 8000;
+/** Ogni quanto, al massimo, ritrasmettiamo lo stato (i timer dei telefoni si aggiornano localmente). */
+const STATE_THROTTLE_MS = 60;
 
 /**
- * Cervello del gioco, headless (nessun DOM): rete, stato, turni, ruota.
- * Viene usato:
+ * Lato rete dell'host: connessioni, heartbeat, birre. Le regole di gioco stanno nel GameEngine.
+ * Usato:
  *  - in Salotto dallo schermo TV (HostScreen lo affianca con la grafica)
  *  - in Pocket dal telefono del creatore, che in più è anche un giocatore via LocalLink
  *
- * Eventi: 'state' (snapshot), 'spin' ({plan, playerId}), 'result' (result),
- *         'player-joined' (player, rejoined), 'player-left' (player), 'signaling' (status)
+ * A ogni cambiamento del motore manda:
+ *  - a tutti lo snapshot pubblico (MSG.STATE)
+ *  - a ciascuno i suoi dati privati (MSG.PRIVATE): parola dell'impostore, negozio, Tappi veri a
+ *    classifica nascosta, timer personale e sabotaggi.
+ *
+ * Eventi locali: 'state' (snapshot), 'game-event' (spin, premi, toast...), 'player-joined',
+ *                'player-left', 'avatar-changed', 'signaling'
  */
 export class HostCore extends Emitter {
   /** @type {Set<{link, playerId:string|null, lastSeen:number, isOwner:boolean, replaced?:boolean, rtt?:number}>} */
   sessions = new Set();
-  #timers = new Set();
-  #spinSeq = 0;
+  #stateTimer = null;
+  #lastStateAt = 0;
 
   constructor({ mode }) {
     super();
@@ -39,6 +42,13 @@ export class HostCore extends Emitter {
   async start() {
     const roomCode = await this.net.start();
     this.state = new GameState({ mode: this.mode, roomCode });
+    this.engine = new GameEngine(this.state, {
+      mode: this.mode,
+      rng: randomFloat, // random crittografico: nessun client può prevedere esiti e Top Slot
+      speed: new URLSearchParams(location.search).get('speed'), // solo per test: ?speed=4
+      onChange: () => this.#scheduleState(),
+      onEvent: (event) => this.#onGameEvent(event),
+    });
     this.heartbeat = setInterval(() => this.#heartbeat(), HEARTBEAT_MS);
     return roomCode;
   }
@@ -53,33 +63,12 @@ export class HostCore extends Emitter {
   }
 
   snapshot() {
-    return this.state.toPublic(performance.now());
+    return this.engine.snapshot();
   }
 
-  /**
-   * Richiesta di girare la ruota con una certa forza (0..1).
-   * Accettata solo se siamo in IDLE e chi chiede è di turno.
-   * `bypassTurn` (tastiera dello schermo Salotto) salta il controllo del turno: utile per demo/test.
-   */
-  requestSpin(playerId, force, { bypassTurn = false } = {}) {
-    const state = this.state;
-    if (state.phase !== PHASE.IDLE) return false;
-    if (!bypassTurn && playerId !== state.turnPlayerId) return false;
-
-    const plan = { id: ++this.#spinSeq, ...planSpin(state.wheelAngle, force) };
-    const spinner = bypassTurn ? (state.turnPlayerId ?? null) : playerId;
-    console.info(
-      `[ruota] lancio #${plan.id}: forza ${(plan.force * 100).toFixed(0)}% → ω0 ${plan.omega0.toFixed(2)} rad/s, ` +
-        `arresto previsto in ${(plan.duration / 1000).toFixed(2)} s dopo ${(Math.abs(plan.to - plan.from) / (2 * Math.PI)).toFixed(2)} giri`,
-    );
-    state.startSpin(plan, spinner, performance.now());
-
-    this.broadcast({ t: MSG.SPIN_START, plan, elapsed: 0, playerId: spinner });
-    this.#broadcastState();
-    this.emit('spin', { plan, playerId: spinner });
-
-    this.#later(() => this.#resolveSpin(), plan.duration + SPIN_SETTLE_MS);
-    return true;
+  /** Azioni dallo schermo TV: avvio partita, impostazioni, lancio di prova (SPAZIO). */
+  hostAction(action) {
+    return this.engine.hostAction(action);
   }
 
   broadcast(msg) {
@@ -90,8 +79,8 @@ export class HostCore extends Emitter {
 
   stop() {
     clearInterval(this.heartbeat);
-    this.#timers.forEach(clearTimeout);
-    this.#timers.clear();
+    clearTimeout(this.#stateTimer);
+    this.engine?.stop();
     for (const session of this.sessions) session.link.close();
     this.sessions.clear();
     this.net.destroy();
@@ -104,7 +93,7 @@ export class HostCore extends Emitter {
     const session = { link, playerId: null, lastSeen: performance.now(), isOwner };
     this.sessions.add(session);
 
-    const helloTimer = this.#later(() => {
+    const helloTimer = setTimeout(() => {
       if (!session.playerId) link.close();
     }, HELLO_TIMEOUT_MS);
 
@@ -149,24 +138,30 @@ export class HostCore extends Emitter {
     session.playerId = player.id;
     console.info(`[birre] ${player.name} ${rejoined ? 'rientra' : 'entra'} con ${player.beer} (${state.beerPool.length} libere)`);
     link.send({ t: MSG.WELCOME, playerId: player.id, mode: this.mode, roomCode: state.roomCode, rejoined });
-    this.#broadcastState();
+    this.engine.onPlayerJoined(player);
+    this.#sendStateNow();
     this.emit('player-joined', player, rejoined);
   }
 
   #onMessage(session, msg) {
     switch (msg.t) {
       case MSG.SPIN_REQUEST:
-        this.requestSpin(session.playerId, msg.force);
+        this.engine.handleAction(session.playerId, { kind: 'spin', force: msg.force });
+        break;
+      case MSG.ACTION:
+        if (msg.a && typeof msg.a === 'object') this.engine.handleAction(session.playerId, msg.a);
         break;
       case MSG.AVATAR_PICK: {
         const before = this.state.getPlayer(session.playerId)?.beer;
         const outcome = this.state.setBeer(session.playerId, msg.beerId);
         if (outcome === 'ok' && before !== msg.beerId) {
           console.info(`[birre] ${this.state.getPlayer(session.playerId).name} cambia ${before} → ${msg.beerId} (${before} torna nel pool)`);
+          // gli adesivi già incollati prendono il nuovo colore del proprietario
+          for (const seg of this.state.segments) if (seg.sticker?.ownerId === session.playerId) seg.sticker.ownerColor = this.state.getPlayer(session.playerId).color;
         }
         if (outcome === 'taken') session.link.send({ t: MSG.TOAST, text: `${getBeer(msg.beerId).name} è già di un altro giocatore` });
         if (outcome === 'ok') {
-          this.#broadcastState();
+          this.#scheduleState();
           this.emit('avatar-changed', this.state.getPlayer(session.playerId));
         }
         break;
@@ -188,18 +183,8 @@ export class HostCore extends Emitter {
     // La birra del giocatore torna nel pool: potrà essere assegnata a chi entra dopo
     const player = this.state.disconnectPlayer(session.playerId);
     if (player) console.info(`[birre] ${player.name} disconnesso: ${player.lastBeer} torna nel pool (${this.state.beerPool.length} libere)`);
-    this.#broadcastState();
+    this.engine.onPlayerLeft(player);
     this.emit('player-left', player);
-
-    // Se era il suo turno, gli diamo qualche secondo per rientrare, poi si passa oltre.
-    if (player && this.state.turnPlayerId === player.id) {
-      this.#later(() => {
-        if (!player.connected && this.state.turnPlayerId === player.id && this.state.phase === PHASE.IDLE) {
-          this.state.advanceTurn();
-          this.#broadcastState();
-        }
-      }, DISCONNECTED_TURN_GRACE_MS);
-    }
   }
 
   #reject(link, reason) {
@@ -218,58 +203,40 @@ export class HostCore extends Emitter {
     }
   }
 
-  // ------------------------------------------------------------ gioco
+  // ------------------------------------------------------------ stato ed eventi
 
-  #resolveSpin() {
-    const state = this.state;
-    const { plan, playerId } = state.spin;
-    const stop = resolveStop(plan.to, state.segments.length);
-    const index = stop.index;
-
-    const segment = state.segments[index];
-    const info = segmentInfo(segment);
-    const player = state.getPlayer(playerId);
-    console.info(
-      `[ruota] lancio #${plan.id} FERMO sullo spicchio #${index} → ${info.label}` +
-        (player ? ` (lanciato da ${player.name})` : ' (demo)') +
-        ` | angolo ruota ${plan.to.toFixed(4)} rad, puntatore a ${stop.pointerLocalDeg.toFixed(2)}° sulla ruota` +
-        `, ${(stop.offsetInSegment * 100).toFixed(1)}% dentro lo spicchio${stop.nearEdge ? ' (sul filo!)' : ''}`,
-    );
-    const result = { spinId: plan.id, segmentIndex: index, type: segment.type, playerId, coinsDelta: 0, text: info.description };
-
-    // Placeholder di risoluzione: i veri eventi (trivia, minigiochi, adesivi) arriveranno nei prossimi step.
-    if (segment.type === SEGMENT_TYPE.FORTUNE && player) {
-      result.coinsDelta = randomInt(1, 5) * 10;
-      player.coins += result.coinsDelta;
-      result.text = `${player.name} vince ${result.coinsDelta} monete!`;
-    } else if (player) {
-      result.text = `${info.label} per ${player.name}! (in arrivo nei prossimi step)`;
-    }
-
-    state.finishSpin(result);
-    this.broadcast({ t: MSG.SPIN_RESULT, result });
-    this.#broadcastState();
-    this.emit('result', result);
-
-    this.#later(() => {
-      state.backToIdle();
-      state.advanceTurn();
-      this.#broadcastState();
-    }, RESULT_HOLD_MS);
+  /** Accorpa le modifiche ravvicinate (un award dopo l'altro) in un solo invio. */
+  #scheduleState() {
+    if (this.#stateTimer) return;
+    const wait = Math.max(0, STATE_THROTTLE_MS - (performance.now() - this.#lastStateAt));
+    this.#stateTimer = setTimeout(() => this.#sendStateNow(), wait);
   }
 
-  #broadcastState() {
-    const snapshot = this.snapshot();
-    this.broadcast({ t: MSG.STATE, s: snapshot });
+  #sendStateNow() {
+    clearTimeout(this.#stateTimer);
+    this.#stateTimer = null;
+    this.#lastStateAt = performance.now();
+    const snapshot = this.engine.snapshot();
+    for (const session of this.sessions) {
+      if (!session.playerId) continue;
+      session.link.send({ t: MSG.STATE, s: snapshot });
+      session.link.send({ t: MSG.PRIVATE, p: this.engine.privateFor(session.playerId) });
+    }
     this.emit('state', snapshot);
   }
 
-  #later(fn, ms) {
-    const timer = setTimeout(() => {
-      this.#timers.delete(timer);
-      fn();
-    }, ms);
-    this.#timers.add(timer);
-    return timer;
+  #onGameEvent(event) {
+    if (event.type === 'toast' && event.to) {
+      for (const session of this.sessions) if (session.playerId === event.to) session.link.send({ t: MSG.TOAST, text: event.text });
+      return;
+    }
+    if (event.type === 'spin') {
+      // lo stato aggiornato parte subito, così il Top Slot è già nello snapshot
+      this.#sendStateNow();
+      this.broadcast({ t: MSG.SPIN_START, plan: event.plan, elapsed: 0, playerId: event.playerId, topSlot: event.topSlot });
+    } else {
+      this.broadcast({ t: MSG.EVENT, e: event });
+    }
+    this.emit('game-event', event);
   }
 }

@@ -1,21 +1,19 @@
 import { MAX_NAME_LENGTH, MAX_PLAYERS } from '../../shared/config.js';
-import { PHASE } from '../../shared/protocol.js';
 import { createBaseSegments } from '../../shared/wheel/segments.js';
-import { TAU, mod } from '../../shared/wheel/kinematics.js';
 import { BEERS, getBeer, isBeerId } from '../../shared/avatars/beers.js';
 import { randomInt } from '../../shared/util/random.js';
 
-const STARTING_COINS = 100;
+export const STARTING_COINS = 100;
 
 /**
- * Stato autoritativo della partita (vive SOLO sull'host).
- * Contiene anche dati privati (clientId) che non escono mai: ai client va toPublic().
+ * Anagrafica autoritativa della stanza (vive SOLO sull'host): giocatori, pool delle birre, ruota.
+ * Le regole di gioco (turni, Tappi, Pinte, adesivi...) stanno in host/game/GameEngine.js.
+ * Contiene dati privati (clientId) che non escono mai.
  */
 export class GameState {
   constructor({ mode, roomCode }) {
     this.mode = mode;
     this.roomCode = roomCode;
-    this.phase = PHASE.IDLE;
     /** @type {Array<{id:string, clientId:string, name:string, beer:string|null, lastBeer:string|null, color:string, coins:number, connected:boolean, isOwner:boolean}>} */
     this.players = [];
     /**
@@ -26,11 +24,8 @@ export class GameState {
      *  - cambio birra volontario → la vecchia torna nel pool, la nuova ne esce
      */
     this.beerPool = BEERS.map((b) => b.id);
-    this.turnPlayerId = null;
     this.segments = createBaseSegments();
     this.wheelAngle = 0;
-    this.spin = null; // { plan, startedAt (performance.now dell'host), playerId }
-    this.lastResult = null;
     this.nextPlayerNumber = 1;
   }
 
@@ -69,12 +64,15 @@ export class GameState {
       lastBeer: null,
       color: '#f4ead5',
       coins: STARTING_COINS,
+      pints: 0,
       connected: true,
       isOwner,
+      joinedAt: n,
+      status: { shield: 0, anchor: 0, skip: 0, mirror: 0 },
+      stats: emptyStats(),
     };
     this.#assignBeer(player, this.#takeBeer());
     this.players.push(player);
-    if (!this.turnPlayerId) this.turnPlayerId = player.id;
     return { player, rejoined: false };
   }
 
@@ -133,57 +131,20 @@ export class GameState {
     return this.players.filter((p) => p.connected);
   }
 
-  // ------------------------------------------------------------ turni
-
-  /** Passa al prossimo giocatore connesso (in ordine di arrivo). */
-  advanceTurn() {
-    if (!this.players.length) {
-      this.turnPlayerId = null;
-      return null;
+  /** Nuova partita con gli stessi giocatori: Tappi, Pinte, stati, statistiche e ruota da capo. */
+  resetForNewGame() {
+    for (const p of this.players) {
+      p.coins = STARTING_COINS;
+      p.pints = 0;
+      p.status = { shield: 0, anchor: 0, skip: 0, mirror: 0 };
+      p.stats = emptyStats();
     }
-    const start = Math.max(0, this.players.findIndex((p) => p.id === this.turnPlayerId));
-    for (let step = 1; step <= this.players.length; step++) {
-      const candidate = this.players[(start + step) % this.players.length];
-      if (candidate.connected) {
-        this.turnPlayerId = candidate.id;
-        return candidate;
-      }
-    }
-    return this.getPlayer(this.turnPlayerId);
+    this.segments = createBaseSegments();
   }
 
-  // ------------------------------------------------------------ ruota
-
-  startSpin(plan, playerId, now) {
-    this.phase = PHASE.SPINNING;
-    this.spin = { plan, startedAt: now, playerId };
-    this.lastResult = null;
-  }
-
-  finishSpin(result) {
-    this.wheelAngle = mod(this.spin.plan.to, TAU);
-    this.spin = null;
-    this.phase = PHASE.RESULT;
-    this.lastResult = result;
-  }
-
-  backToIdle() {
-    this.phase = PHASE.IDLE;
-  }
-
-  // ------------------------------------------------------------ serializzazione
-
-  toPublic(now) {
-    return {
-      mode: this.mode,
-      roomCode: this.roomCode,
-      phase: this.phase,
-      players: this.players.map(({ clientId: _secret, lastBeer: _last, ...pub }) => pub),
-      turnPlayerId: this.turnPlayerId,
-      wheel: { segments: this.segments, angle: this.wheelAngle },
-      spin: this.spin ? { plan: this.spin.plan, elapsed: now - this.spin.startedAt, playerId: this.spin.playerId } : null,
-      lastResult: this.lastResult,
-    };
+  /** Giocatori senza dati segreti (clientId) né interni. */
+  publicPlayers() {
+    return this.players.map(({ clientId: _secret, lastBeer: _last, stats: _stats, ...pub }) => pub);
   }
 
   #uniqueName(name, ownId) {
@@ -202,4 +163,16 @@ export function sanitizeName(raw) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, MAX_NAME_LENGTH);
+}
+
+/** Statistiche per i Bonus Segreti di fine partita. */
+export function emptyStats() {
+  return {
+    triviaCorrect: 0,
+    triviaTimeMs: 0, // somma dei tempi delle risposte giuste (per il tempo medio)
+    stickersPlaced: 0,
+    malusTaken: 0,
+    spent: 0,
+    pintsBought: 0,
+  };
 }

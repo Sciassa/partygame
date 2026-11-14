@@ -150,12 +150,41 @@ export function buildPubSet(renderer, scene, { shadows = false } = {}) {
   group.add(top, edge, front);
 
   scene.add(group);
+
+  // --- Atmosfere: 'normal' (pub caldo) e 'happy' (Happy Hour: neon viola e oro intenso).
+  // Ogni luce sfuma verso il colore/intensità dell'atmosfera corrente (niente stacchi bruschi).
+  const moodLights = [
+    { light: hemi, normal: [0x3a4766, 0.5], happy: [0x5a2a8a, 0.75], ground: true },
+    { light: key, normal: [0xffdcb4, 2.5], happy: [0xffcf6a, 3.2] },
+    { light: rimRight, normal: [0xff8a2e, 2.2], happy: [0xb44dff, 3.6] },
+    { light: rimLeft, normal: [0xffb062, 1.0], happy: [0xffc23a, 2.4] },
+    { light: lampLeft, normal: [PUB_COLORS.amber, 9], happy: [0xb44dff, 22] },
+    { light: lampRight, normal: [PUB_COLORS.amber, 7], happy: [0xffc23a, 16] },
+  ].map((m) => ({ ...m, normalColor: new THREE.Color(m.normal[0]), happyColor: new THREE.Color(m.happy[0]) }));
+  const glowNormal = new THREE.Color(0xffffff);
+  const glowHappy = new THREE.Color(0xc77dff);
+  const hazeNormal = new THREE.Color(0xffdcb8);
+  const hazeHappy = new THREE.Color(0xc89bff);
+  let mood = 'normal';
+  let moodMix = 0; // 0 = normale, 1 = happy hour
+  const tmp = new THREE.Color();
+
   return {
     group,
     glow,
     key,
-    update(t) {
-      glow.material.opacity = 0.85 + 0.15 * Math.sin(t * 0.9);
+    setMood(next) {
+      mood = next;
+    },
+    update(t, dt = 0.016) {
+      moodMix += ((mood === 'happy' ? 1 : 0) - moodMix) * (1 - Math.exp(-dt * 1.5));
+      for (const m of moodLights) {
+        m.light.color.copy(tmp.copy(m.normalColor).lerp(m.happyColor, moodMix));
+        m.light.intensity = m.normal[1] + (m.happy[1] - m.normal[1]) * moodMix;
+      }
+      glow.material.color.copy(tmp.copy(glowNormal).lerp(glowHappy, moodMix));
+      hazes.forEach((h) => h.material.color.copy(tmp.copy(hazeNormal).lerp(hazeHappy, moodMix)));
+      glow.material.opacity = (0.85 + 0.15 * Math.sin(t * (0.9 + moodMix * 2))) * (1 + moodMix * 0.6);
       hazes.forEach((h, i) => {
         h.position.x = h.userData.base.x + Math.sin(t * 0.05 + i * 2) * 1.8;
         h.material.opacity = h.userData.base.op * (0.8 + 0.2 * Math.sin(t * 0.3 + i));

@@ -432,3 +432,144 @@ p {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ===== Spin & Sip: componenti condivisi ===== */
+.btn-gold {
+  border-color: transparent;
+  background: linear-gradient(180deg, #ffe08a, #e9b44c 60%, #b8801f);
+  color: #1d1406;
+}
+
+.btn.disabled,
+.disabled {
+  opacity: 0.38;
+  pointer-events: none;
+}
+
+.segmented {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+}
+
+.seg-btn {
+  min-width: 52px;
+  min-height: 40px;
+  padding: 0 0.8rem;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.seg-btn.active {
+  background: var(--amber);
+  color: #1a1206;
+}
+
+.loader.small {
+  width: 18px;
+  height: 18px;
+  border-width: 2px;
+}
+
+/* Top Slot (rulli sopra la ruota, su TV e telefoni) */
+.top-slot {
+  display: none;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.6rem 0.45rem 0.9rem;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #1a1f2d, #10131c);
+  border: 1px solid rgba(217, 169, 79, 0.6);
+  box-shadow: 0 0 24px rgba(255, 169, 74, 0.18);
+}
+
+.top-slot.show {
+  display: inline-flex;
+}
+
+.top-slot.hit {
+  animation: slot-hit 0.5s 4;
+  border-color: var(--amber);
+}
+
+@keyframes slot-hit {
+  50% { box-shadow: 0 0 40px rgba(255, 190, 90, 0.9); }
+}
+
+.top-slot-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  color: var(--gold);
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+.top-slot-reels {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.reel {
+  --reel-h: 2.4rem;
+  width: 9.5rem;
+  height: var(--reel-h);
+  overflow: hidden;
+  border-radius: 8px;
+  background: #0b0d13;
+  border: 1px solid var(--border);
+}
+
+.reel-small {
+  width: 4.2rem;
+}
+
+.reel-strip {
+  --reel-h: 2.4rem;
+  will-change: transform;
+}
+
+.top-slot.spinning .reel-strip {
+  animation: reel-roll 0.35s linear infinite;
+}
+
+@keyframes reel-roll {
+  from { transform: translateY(0); }
+  to { transform: translateY(calc(-1 * var(--loop) * var(--reel-h))); }
+}
+
+.reel-item {
+  height: var(--reel-h);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.top-slot.revealed .reel-item:last-child {
+  color: var(--amber);
+  text-shadow: 0 0 12px rgba(255, 169, 74, 0.7);
+}
+
+/* Happy Hour: viola e oro */
+body.happy-hour {
+  --amber: #ffc23a;
+  --neon: #b44dff;
+  background:
+    radial-gradient(90% 60% at 50% -10%, rgba(180, 77, 255, 0.22) 0%, transparent 60%),
+    radial-gradient(70% 50% at 100% 110%, rgba(255, 194, 58, 0.14) 0%, transparent 60%),
+    var(--bg);
+}

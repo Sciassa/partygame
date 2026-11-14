@@ -1,4 +1,4 @@
-import { TAU } from './kinematics.js';
+import { TAU, segmentLayout } from './kinematics.js';
 import { segmentInfo } from './segments.js';
 
 export const WHEEL_FONT = '"Oswald", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif';
@@ -29,14 +29,15 @@ export function drawWheelFace(canvas, segments, size) {
   const c = size / 2;
   const r = size / 2;
   const n = segments.length;
-  const s = TAU / n;
+  const layout = segmentLayout(segments);
+  // angoli canvas di inizio/fine di ogni spicchio (gli spicchi possono avere ampiezze diverse)
+  const arcOf = (i) => ({ a0: -Math.PI / 2 - layout[i].start, a1: -Math.PI / 2 - layout[i].end, s: layout[i].end - layout[i].start });
 
   ctx.clearRect(0, 0, size, size);
 
   segments.forEach((segment, i) => {
     const { color } = segmentInfo(segment);
-    const a0 = -Math.PI / 2 - i * s;
-    const a1 = a0 - s;
+    const { a0, a1, s } = arcOf(i);
 
     // fondo: vinile scuro, appena più chiaro verso il bordo (alternato per dare ritmo)
     ctx.beginPath();
@@ -84,7 +85,7 @@ export function drawWheelFace(canvas, segments, size) {
   ctx.translate(c, c);
   ctx.lineCap = 'round';
   for (let i = 0; i < n; i++) {
-    const a = -Math.PI / 2 - i * s;
+    const a = arcOf(i).a0;
     const from = [Math.cos(a) * r * 0.2, Math.sin(a) * r * 0.2];
     const to = [Math.cos(a) * r, Math.sin(a) * r];
     ctx.strokeStyle = GOLD;
@@ -102,11 +103,34 @@ export function drawWheelFace(canvas, segments, size) {
   }
   ctx.restore();
 
+  // Bordo nel colore della birra del proprietario per gli spicchi con un adesivo
+  segments.forEach((segment, i) => {
+    if (!segment.sticker) return;
+    const { a0, a1 } = arcOf(i);
+    const inset = size * 0.012;
+    ctx.save();
+    ctx.translate(c, c);
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a0) * r * 0.22, Math.sin(a0) * r * 0.22);
+    ctx.arc(0, 0, r - inset, a0, a1, true);
+    ctx.lineTo(Math.cos(a1) * r * 0.22, Math.sin(a1) * r * 0.22);
+    ctx.arc(0, 0, r * 0.22, a1, a0, false);
+    ctx.closePath();
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = size * (segment.sticker.level > 1 ? 0.016 : 0.011);
+    ctx.strokeStyle = segment.sticker.ownerColor ?? GOLD;
+    ctx.shadowColor = segment.sticker.ownerColor ?? GOLD;
+    ctx.shadowBlur = size * 0.01;
+    ctx.stroke();
+    ctx.restore();
+  });
+
   // Scritte (lungo il raggio) e icone (in piedi verso l'esterno), in oro
-  const chordAtLabel = 2 * r * 0.56 * Math.sin(s / 2);
   segments.forEach((segment, i) => {
     const info = segmentInfo(segment);
-    const center = -Math.PI / 2 - (i + 0.5) * s;
+    const { a0, s } = arcOf(i);
+    const chordAtLabel = 2 * r * 0.56 * Math.sin(Math.min(s, Math.PI / 2) / 2);
+    const center = a0 - s / 2;
 
     ctx.save();
     ctx.translate(c, c);
@@ -134,17 +158,45 @@ export function drawWheelFace(canvas, segments, size) {
     ctx.translate(c, c);
     ctx.rotate(center + Math.PI / 2);
     ctx.translate(0, -r * 0.88);
-    const iconSize = Math.min(2 * r * 0.88 * Math.sin(s / 2) * 0.42, r * 0.085);
+    const iconSize = Math.min(2 * r * 0.88 * Math.sin(Math.min(s, Math.PI / 2) / 2) * 0.42, r * 0.085);
     drawIcon(ctx, info.icon, iconSize);
-
-    // Adesivi applicati (placeholder grafico: un bollino per adesivo)
-    segment.stickers?.forEach((sticker, k) => {
-      ctx.beginPath();
-      ctx.arc((k - (segment.stickers.length - 1) / 2) * iconSize * 0.7, r * 0.16, iconSize * 0.22, 0, TAU);
-      ctx.fillStyle = sticker.color ?? GOLD_LIGHT;
-      ctx.fill();
-    });
     ctx.restore();
+
+    // Adesivo: bollino con icona, livello, lucchetto e montepremi
+    const sticker = segment.sticker;
+    if (sticker) {
+      ctx.save();
+      ctx.translate(c, c);
+      ctx.rotate(center + Math.PI / 2);
+      ctx.translate(0, -r * 0.31);
+      const br = Math.min(r * 0.075, 2 * r * 0.31 * Math.sin(Math.min(s, Math.PI / 2) / 2) * 0.48);
+      ctx.beginPath();
+      ctx.arc(0, 0, br, 0, TAU);
+      ctx.fillStyle = '#10141f';
+      ctx.fill();
+      ctx.lineWidth = br * 0.18;
+      ctx.strokeStyle = sticker.ownerColor ?? GOLD;
+      ctx.stroke();
+      ctx.font = `${br * 1.05}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(sticker.icon ?? '★', 0, br * 0.06);
+      if (sticker.level > 1) {
+        ctx.font = `700 ${br * 0.62}px ${WHEEL_FONT}`;
+        ctx.fillStyle = GOLD_LIGHT;
+        ctx.fillText('II', br * 0.95, -br * 0.85);
+      }
+      if (sticker.lockedTurns > 0) {
+        ctx.font = `${br * 0.6}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+        ctx.fillText('🔒', -br * 0.95, -br * 0.85);
+      }
+      if (segment.jackpot > 0) {
+        ctx.font = `600 ${br * 0.6}px ${WHEEL_FONT}`;
+        ctx.fillStyle = GOLD_LIGHT;
+        ctx.fillText(`${segment.jackpot}`, 0, br * 1.6);
+      }
+      ctx.restore();
+    }
   });
 
   // Anello oro sottile attorno al mozzo
@@ -174,6 +226,29 @@ function drawIcon(ctx, icon, size) {
       ctx.lineTo(0.03 * u, -0.18 * u);
       ctx.closePath();
       ctx.fill();
+      break;
+    }
+    case 'keg': {
+      // fusto di birra stilizzato
+      ctx.lineWidth = u * 0.14;
+      ctx.beginPath();
+      ctx.ellipse(0, -u * 0.62, u * 0.62, u * 0.2, 0, 0, TAU);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-u * 0.62, -u * 0.62);
+      ctx.quadraticCurveTo(-u * 0.82, 0, -u * 0.62, u * 0.62);
+      ctx.moveTo(u * 0.62, -u * 0.62);
+      ctx.quadraticCurveTo(u * 0.82, 0, u * 0.62, u * 0.62);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(0, u * 0.62, u * 0.62, u * 0.2, 0, 0, Math.PI);
+      ctx.stroke();
+      for (const y of [-0.2, 0.2]) {
+        ctx.beginPath();
+        ctx.moveTo(-u * 0.72, y * u);
+        ctx.lineTo(u * 0.72, y * u);
+        ctx.stroke();
+      }
       break;
     }
     case 'coin': {

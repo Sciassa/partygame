@@ -11,6 +11,36 @@ Party game multiplayer per 2–12 giocatori, ispirato ai game show e ai party ga
 
 I giocatori entrano scansionando il QR code (`?room=ABCD`) oppure scrivendo il codice di 4 lettere.
 
+## Regolamento «Spin & Sip»
+
+Si vince con le **Pinte d'Oro**; a parità di Pinte contano i **Tappi**. La partita dura 12, 15 o 20 turni (si sceglie in lobby); ogni turno è un lancio della ruota.
+
+**Un turno**
+1. **Negozio (25 s):** chi è di turno vede 3 adesivi a caso dal catalogo di 30 (`src/data/stickers.ts`) e può incollarne uno su uno spicchio. Se in lobby è attiva l'opzione, nel negozio può anche comprare una Pinta d'Oro.
+2. **Scommesse (8 s):** gli altri puntano 0, 15 o 30 Tappi sulla categoria dove si fermerà la ruota (paga x3) e/o sull'esito del turno per chi lancia, guadagno o perdita (paga x2).
+3. **Lancio:** swipe o tasto, con la fisica ad attrito di sempre. Il **Top Slot** estrae uno spicchio e un moltiplicatore (x2, x3 o +100 di jackpot): se la ruota si ferma proprio lì, i premi del turno si moltiplicano.
+4. **Atterraggio:** si pagano le scommesse sulla categoria, il Top Slot, le royalties (15 Tappi al proprietario dell'adesivo), poi scatta l'effetto dell'adesivo.
+5. **Evento dello spicchio:**
+   - **Trivia:** per tutti, a scelta multipla o a risposta aperta; la velocità dà Tappi extra.
+   - **Minigioco:** uno tra Impostore Flash, Spillatura Perfetta, Asta al Buio e Higher/Lower.
+   - **Fortuna:** Tappi in più o in meno per chi ha lanciato.
+   - **Fusto d'Oro:** si convertono Tappi in una Pinta; costa 250 e sale di 50 a ogni acquisto.
+6. **Fine turno:** si pagano le scommesse sull'esito, poi riepilogo.
+
+**Adesivi**
+- Prendono il bordo del colore della birra del proprietario.
+- Incollarne uno su un proprio spicchio lo porta al Lv.2, con effetto raddoppiato.
+- Sovrascrivere l'adesivo di un altro costa +50%; il Lucchetto lo impedisce.
+- Ci sono 4 famiglie: Economia, Strategia, Manipolazione ruota e Sabotaggi. L'Espansione allarga davvero lo spicchio sulla ruota 3D.
+- I sabotaggi (Blackout, Dito Tremante, Fuso Orario, Sabotaggio, Dislessia) cambiano l'interfaccia dei telefoni nel prossimo evento e colpiscono tutti tranne il proprietario. La Dittatura fa scegliere la categoria del prossimo Trivia.
+
+**Happy Hour:** negli ultimi 3 turni le luci 3D passano al neon viola e oro e tutti i Tappi vinti o persi valgono doppio.
+
+**Fine partita:** 3 Bonus Segreti, +1 Pinta d'Oro ciascuno, poi la classifica.
+- **Fulmine del Pub:** il tempo medio più veloce nelle risposte giuste ai Trivia.
+- **Architetto del Caos:** chi ha piazzato più adesivi.
+- **Bersaglio Umano:** chi ha subito più malus.
+
 ## Sviluppo
 
 Requisiti: Node 22 e pnpm 10. Se non hai pnpm, `corepack enable` lo attiva.
@@ -31,10 +61,14 @@ Vite parte con `--host`, quindi i telefoni sulla stessa Wi-Fi possono aprire `ht
 | `pnpm build` | build di produzione in `dist/` e generazione di `dist/sw.js` |
 | `pnpm preview` | serve la build per provare la PWA e il Service Worker |
 | `pnpm icons` | rigenera le icone PNG in `public/icons/` |
+| `pnpm simulate [n] [seed]` | simula n partite complete con bot, senza browser, e controlla le regole |
+| `pnpm test:rules` | test mirati del regolamento (adesivi, Happy Hour, Fusto, premi) |
+| `pnpm validate:questions` / `pnpm typecheck` | controllo del database Trivia e dei tipi |
 
 ### Trucchi per il debug
 
-- **SPAZIO** sullo schermo Salotto gira la ruota anche senza telefoni. **F** attiva lo schermo intero.
+- Sullo schermo Salotto: **INVIO** avvia la partita, **SPAZIO** fa un lancio di prova quando tocca a qualcuno, **F** attiva lo schermo intero.
+- `?speed=4` sullo schermo host accelera tutti i timer di gioco, ma non le animazioni della ruota: utile per provare una partita intera in pochi minuti.
 - `?debug` nell'URL mostra il contatore FPS sulla ruota.
 - `?multi` nell'URL dà a ogni scheda un'identità diversa, così puoi simulare più giocatori nello stesso browser.
 
@@ -49,7 +83,11 @@ src/
 ├── main.js                  router: landing oppure rientro automatico in una stanza
 ├── app/Landing.js           schermata iniziale (Salotto / Pocket / Entra)
 ├── host/                    ── AUTORITATIVO: gira solo sul dispositivo host ──
-│   ├── HostCore.js          cervello headless: connessioni, turni, spin, heartbeat, log in console
+│   ├── HostCore.js          rete: connessioni, heartbeat, stato pubblico + dati privati per giocatore
+│   ├── game/GameEngine.js   regolamento Spin & Sip: fasi, timer, economia, scommesse, Top Slot, Happy Hour
+│   ├── game/stickerEngine.js  negozio e i 30 adesivi (piazzamento, Calamita, Jackpot, effetti)
+│   ├── game/events/         trivia + sfida 1v1, impostore, spillatura, asta, higher/lower
+│   ├── game/awards.js       Bonus Segreti di fine partita
 │   ├── net/HostPeer.js      peer PeerJS con ID derivato dal codice stanza
 │   ├── state/GameState.js   stato della partita (giocatori, birre, monete, ruota)
 │   ├── physics/WheelPhysics.js  forza → velocità iniziale, risoluzione dello spicchio (mod 2π)
@@ -58,6 +96,7 @@ src/
 │   ├── ClientApp.js         UI giocatore e riconnessione automatica
 │   ├── net/ClientPeer.js    connessione WebRTC verso l'host
 │   ├── ui/SpinPad.js        swipe e "tieni premuto" → forza del lancio (0..1)
+│   ├── ui/panels.js         un pannello per ogni fase/minigioco (+ sabotaggi sull'interfaccia)
 │   └── ui/BeerPicker.js     scelta della birra-avatar
 ├── pocket/startPocket.js    HostCore + ClientApp sullo stesso telefono (LocalLink)
 ├── shared/                  codice usato da entrambi i lati
@@ -68,6 +107,7 @@ src/
 │   ├── avatars/             beers.js (12 birre), BeerAvatar 3D, AvatarLineup (bancone)
 │   ├── stage/               StageRenderer (scena, luci, bloom, loop), PubSet, StageSync
 │   └── ui/beerIcon.js       iconcina CSS del bicchiere
+├── data/                    domande Trivia, 30 adesivi, 50 parole dell'Impostore, 44 curiosità numeriche
 ├── pwa/                     registrazione e template del Service Worker
 └── styles/                  CSS "Modern Pub" dark (token in base.css)
 ```
@@ -157,4 +197,4 @@ Il workflow `.github/workflows/deploy.yml` esegue la build e pubblica su GitHub 
 
 - **Pocket:** se il telefono host va in background o si blocca lo schermo, la partita si ferma per tutti. Non esiste ancora la migrazione dell'host.
 - **Reti 4G/5G:** dietro NAT simmetrico serve un server TURN, configurabile via `.env.local`. Solo con STUN alcune connessioni possono fallire.
-- **Eventi della ruota:** gli spicchi sono placeholder. Fortuna assegna monete, Trivia e Minigioco arriveranno nei prossimi step, insieme a negozio e adesivi.
+- **Bilanciamento:** prezzi degli adesivi, premi dei minigiochi e costo delle Pinte sono una prima taratura, verificata con il simulatore ma non ancora con persone vere.

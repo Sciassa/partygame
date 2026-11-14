@@ -42,8 +42,39 @@ export function pointerLocalAngle(wheelAngle) {
   return mod(-wheelAngle, TAU);
 }
 
-export function segmentIndexAt(wheelAngle, segmentCount) {
-  return Math.floor(pointerLocalAngle(wheelAngle) / (TAU / segmentCount)) % segmentCount;
+/**
+ * Disposizione degli spicchi: [{ start, end }] in angoli locali (da +Y, antiorario), 0..2π.
+ * Accetta un numero (spicchi uguali) o l'array degli spicchi con `size` (1 = normale;
+ * l'adesivo «Espansione» la porta a 2 o 3, rubando spazio agli altri).
+ */
+export function segmentLayout(segmentsOrCount) {
+  const sizes = typeof segmentsOrCount === 'number' ? Array(segmentsOrCount).fill(1) : segmentsOrCount.map((s) => s.size ?? 1);
+  const total = sizes.reduce((a, b) => a + b, 0);
+  let acc = 0;
+  return sizes.map((size) => {
+    const start = (acc / total) * TAU;
+    acc += size;
+    return { start, end: (acc / total) * TAU };
+  });
+}
+
+/** Indice dello spicchio sotto al puntatore. `layout` = numero di spicchi, array di spicchi o layout. */
+export function segmentIndexAt(wheelAngle, layout) {
+  const slots = typeof layout === 'number' || !('start' in (layout[0] ?? {})) ? segmentLayout(layout) : layout;
+  const a = pointerLocalAngle(wheelAngle);
+  for (let i = 0; i < slots.length; i++) if (a >= slots[i].start && a < slots[i].end) return i;
+  return slots.length - 1;
+}
+
+/**
+ * Piano "ad aggancio" (non fisico): porta la ruota da `fromAngle` a far stare il puntatore su
+ * `targetLocal` con un ease-out. Serve alla Calamita, che fa "scivolare" la ruota sullo spicchio vicino.
+ */
+export function createEasePlan(fromAngle, targetLocal, durationMs = 1100) {
+  const from = mod(fromAngle, TAU);
+  let delta = mod(targetLocal - pointerLocalAngle(from), TAU);
+  if (delta > Math.PI) delta -= TAU; // la via più corta, anche all'indietro
+  return { kind: 'ease', from, to: from - delta, duration: durationMs, direction: delta >= 0 ? -1 : 1 };
 }
 
 /** Tempo di arresto in secondi. */
@@ -83,6 +114,10 @@ export function createSpinPlan(fromAngle, omega0, friction = FRICTION, direction
 /** Angolo della ruota dopo `elapsedMs` dall'inizio dello spin. */
 export function angleAt(plan, elapsedMs) {
   if (elapsedMs >= plan.duration) return plan.to;
+  if (plan.kind === 'ease') {
+    const x = Math.max(0, elapsedMs) / plan.duration;
+    return plan.from + (plan.to - plan.from) * (1 - (1 - x) ** 3);
+  }
   const t = Math.max(0, elapsedMs) / 1000;
   return plan.from + plan.direction * travelAt(plan.omega0, t, plan);
 }
@@ -90,5 +125,9 @@ export function angleAt(plan, elapsedMs) {
 /** Velocità angolare in rad/s (usata per l'animazione del puntatore e per gli effetti). */
 export function angularVelocityAt(plan, elapsedMs) {
   if (elapsedMs >= plan.duration) return 0;
+  if (plan.kind === 'ease') {
+    const x = Math.max(0, elapsedMs) / plan.duration;
+    return (Math.abs(plan.to - plan.from) * 3 * (1 - x) ** 2) / (plan.duration / 1000);
+  }
   return speedAt(plan.omega0, Math.max(0, elapsedMs) / 1000, plan);
 }

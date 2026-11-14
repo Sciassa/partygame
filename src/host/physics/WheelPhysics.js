@@ -1,4 +1,4 @@
-import { FRICTION, TAU, createSpinPlan, pointerLocalAngle, segmentIndexAt } from '../../shared/wheel/kinematics.js';
+import { FRICTION, createSpinPlan, pointerLocalAngle, segmentIndexAt, segmentLayout } from '../../shared/wheel/kinematics.js';
 import { randomFloat } from '../../shared/util/random.js';
 
 /**
@@ -39,13 +39,17 @@ export function planSpin(fromAngle, force, friction = FRICTION) {
 /**
  * Su quale spicchio si è fermato il puntatore?
  * Il puntatore è fisso in alto; la ruota ha ruotato di `finalAngle`. Riportiamo il puntatore nello
- * spazio locale della ruota (-angolo, modulo 2π) e dividiamo per l'ampiezza di uno spicchio.
+ * spazio locale della ruota (-angolo, modulo 2π) e cerchiamo lo spicchio che contiene quell'angolo
+ * (gli spicchi possono avere ampiezze diverse: adesivo «Espansione»).
+ * @param {number} finalAngle
+ * @param {Array|number} segments spicchi (con `size`) o numero di spicchi uguali
  */
-export function resolveStop(finalAngle, segmentCount) {
-  const segmentAngle = TAU / segmentCount;
+export function resolveStop(finalAngle, segments) {
+  const layout = segmentLayout(segments);
   const local = pointerLocalAngle(finalAngle); // 0..2π
-  const index = segmentIndexAt(finalAngle, segmentCount);
-  const offset = (local - index * segmentAngle) / segmentAngle; // 0..1: posizione dentro lo spicchio
+  const index = segmentIndexAt(finalAngle, layout);
+  const { start, end } = layout[index];
+  const offset = (local - start) / (end - start); // 0..1: posizione dentro lo spicchio
   return {
     index,
     pointerLocalDeg: (local * 180) / Math.PI,

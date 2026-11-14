@@ -3,7 +3,7 @@
  * Ogni messaggio è un oggetto JSON con un campo `t` (tipo). L'host è l'unica fonte di verità:
  * i client inviano solo "intenzioni" (es. SPIN_REQUEST) e ricevono lo stato autoritativo.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export const MODE = Object.freeze({
   /** Schermo grande (TV/PC) = host + render 3D; i telefoni sono solo controller. */
@@ -12,10 +12,22 @@ export const MODE = Object.freeze({
   POCKET: 'pocket',
 });
 
+/**
+ * Fasi della partita «Spin & Sip» (macchina a stati in host/game/GameEngine.js).
+ * L'Happy Hour non è una fase ma una modalità (`turn.happyHour`) che vale negli ultimi 3 turni.
+ */
 export const PHASE = Object.freeze({
-  IDLE: 'idle', // in attesa che il giocatore di turno giri la ruota
-  SPINNING: 'spinning',
-  RESULT: 'result', // risultato mostrato, a breve si passa al turno successivo
+  LOBBY: 'lobby', // giocatori in arrivo, impostazioni, «Inizia partita»
+  SHOP: 'shop', // il giocatore di turno può comprare e incollare un adesivo (o una Pinta)
+  BETTING: 'pre_spin_betting', // 8 s: gli altri scommettono su categoria ed esito
+  AWAIT_SPIN: 'await_spin', // il giocatore di turno lancia la ruota
+  SPINNING: 'spinning', // ruota + Top Slot in movimento
+  LANDING: 'landing', // royalties, Top Slot, effetto adesivo, scommesse sulla categoria
+  CHOICE: 'choice', // scelta del giocatore: Fusto d'Oro, rivale della Sfida, Dittatura
+  EVENT: 'event', // trivia o minigioco sui telefoni (dettagli in snapshot.event)
+  TURN_RESULT: 'turn_result', // riepilogo del turno e scommesse sull'esito
+  AWARDS: 'endgame_awards', // Bonus Segreti di fine partita
+  GAME_OVER: 'game_over',
 });
 
 export const MSG = Object.freeze({
@@ -23,6 +35,7 @@ export const MSG = Object.freeze({
   HELLO: 'hello', // { v, clientId, name }
   SPIN_REQUEST: 'spin:req', // { force: 0..1 } forza del lancio (swipe o tasto)
   AVATAR_PICK: 'avatar:pick', // { beerId } il giocatore sceglie la sua birra
+  ACTION: 'action', // { a: { kind, ... } } qualsiasi azione di gioco (scommessa, risposta, acquisto...)
   PONG: 'pong', // { ts }
 
   // host -> client
@@ -30,7 +43,8 @@ export const MSG = Object.freeze({
   REJECT: 'reject', // { reason }
   STATE: 'state', // { s: snapshot pubblico }
   SPIN_START: 'spin:start', // { plan, elapsed, playerId } plan = parametri fisici dello spin
-  SPIN_RESULT: 'spin:result', // { result }
+  EVENT: 'event', // { e: { type, ... } } notifiche istantanee (suoni, toast, animazioni)
+  PRIVATE: 'private', // { p } dati riservati al singolo giocatore (parola dell'impostore, negozio...)
   PING: 'ping', // { ts }
   TOAST: 'toast', // { text }
 });

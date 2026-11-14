@@ -33,6 +33,12 @@ export function clear(el) {
   return el;
 }
 
+/** Sostituisce i figli di `el` ignorando null/false (append() li stamperebbe come testo). */
+export function fill(el, ...children) {
+  el.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
+  return el;
+}
+
 let toastTimer;
 /** Notifica temporanea in basso allo schermo. */
 export function toast(text, ms = 2600) {

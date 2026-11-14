@@ -124,6 +124,19 @@ export class StageRenderer extends Emitter {
     this.wheel.setHighlight(index);
   }
 
+  /** Top Slot: evidenzia lo spicchio estratto (-1 per togliere). */
+  setTopSlot(index) {
+    this.wheel.setTopSlot(index);
+  }
+
+  /** Happy Hour: luci della scena e neon della ruota in viola/oro. */
+  setHappyHour(on) {
+    if (this.happyHour === on) return;
+    this.happyHour = on;
+    this.pub.setMood(on ? 'happy' : 'normal');
+    this.wheel.setHappyHour(on);
+  }
+
   // ---------------------------------------------------------------- avatar
 
   setPlayers(players, turnPlayerId, phase) {
@@ -186,7 +199,7 @@ export class StageRenderer extends Emitter {
     this.#updateSpin();
     this.wheel.update(t, dt);
     this.avatars.update(t, dt);
-    this.pub.update(t);
+    this.pub.update(t, dt);
 
     if (this.composer) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);

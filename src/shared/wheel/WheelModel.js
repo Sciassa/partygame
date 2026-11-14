@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { TAU, segmentIndexAt } from './kinematics.js';
+import { TAU, segmentIndexAt, segmentLayout } from './kinematics.js';
 import { drawWheelFace } from './wheelTexture.js';
 import { enableShadows, vinylMaterial } from '../stage/vinyl.js';
 
@@ -19,6 +19,9 @@ const PALETTE = {
   navyDark: 0x161b29,
   gold: 0xd9a94f,
   amber: new THREE.Color('#ff9d3a'),
+  // Happy Hour: neon viola e oro intenso
+  violet: new THREE.Color('#b44dff'),
+  hhGold: new THREE.Color('#ffc23a'),
 };
 
 /**
@@ -39,6 +42,9 @@ export class WheelModel {
   #lights = { mode: 'idle', color: new THREE.Color(), since: 0 };
   #lampFlash = 0;
   #tmpColor = new THREE.Color();
+  #happyHour = false;
+  layout = [];
+  topSlotIndex = -1;
 
   constructor({ textureSize = 2048, anisotropy = 1 } = {}) {
     this.textureSize = textureSize;
@@ -52,11 +58,14 @@ export class WheelModel {
 
   setSegments(segments) {
     this.segments = segments;
+    this.layout = segmentLayout(segments);
     drawWheelFace(this.faceCanvas, segments, this.textureSize);
     this.faceTexture.needsUpdate = true;
-    this.#buildStuds(segments.length);
-    this.#buildNeonArcs(segments.length);
-    this.lastIndex = segments.length ? segmentIndexAt(this.angle, segments.length) : -1;
+    this.#buildStuds();
+    this.#buildNeonArcs();
+    this.lastIndex = segments.length ? segmentIndexAt(this.angle, this.layout) : -1;
+    if (this.highlightIndex >= 0) this.setHighlight(this.highlightIndex);
+    this.setTopSlot(this.topSlotIndex);
   }
 
   /** Ridisegna la texture (es. quando il web font è finalmente caricato). */
@@ -73,7 +82,7 @@ export class WheelModel {
     this.rotating.rotation.z = angle;
     const n = this.segments.length;
     if (!n) return false;
-    const index = segmentIndexAt(angle, n);
+    const index = segmentIndexAt(angle, this.layout);
     if (index === this.lastIndex) return false;
     this.lastIndex = index;
     return true;
@@ -95,11 +104,29 @@ export class WheelModel {
       this.highlight.visible = false;
       return;
     }
-    const s = TAU / this.segments.length;
+    const { start, end } = this.layout[index];
     this.highlight.geometry.dispose();
-    // CircleGeometry misura thetaStart da +X: lo spicchio i parte da +Y + i*s
-    this.highlight.geometry = new THREE.CircleGeometry(FACE_RADIUS, 32, Math.PI / 2 + index * s, s);
+    // CircleGeometry misura thetaStart da +X: lo spicchio parte da +Y + start
+    this.highlight.geometry = new THREE.CircleGeometry(FACE_RADIUS, 32, Math.PI / 2 + start, end - start);
     this.highlight.visible = true;
+  }
+
+  /** Top Slot: cornice luminosa sullo spicchio estratto dal rullo (-1 per toglierla). */
+  setTopSlot(index) {
+    this.topSlotIndex = index;
+    if (index < 0 || !this.layout[index]) {
+      this.topSlotMarker.visible = false;
+      return;
+    }
+    const { start, end } = this.layout[index];
+    this.topSlotMarker.geometry.dispose();
+    this.topSlotMarker.geometry = new THREE.RingGeometry(FACE_RADIUS * 0.3, FACE_RADIUS * 0.985, 48, 1, Math.PI / 2 + start, end - start);
+    this.topSlotMarker.visible = true;
+  }
+
+  /** Happy Hour: neon viola/oro al posto dell'ambra. */
+  setHappyHour(on) {
+    this.#happyHour = on;
   }
 
   update(t, dt) {
@@ -116,11 +143,13 @@ export class WheelModel {
     // Lampada del puntatore: brace calda che "scatta" a ogni borchia
     this.#lampFlash = Math.max(0, this.#lampFlash - dt * 6);
     const breathe = 0.85 + 0.15 * Math.sin(t * 2.1);
-    this.lamp.material.color.copy(PALETTE.amber).multiplyScalar(2.2 * breathe + 3 * this.#lampFlash);
-    this.crescent.material.color.copy(PALETTE.amber).multiplyScalar(2.4 * breathe);
-    this.baseDome.material.color.copy(PALETTE.amber).multiplyScalar(1.6 * breathe);
+    const glowColor = this.#happyHour ? PALETTE.violet : PALETTE.amber;
+    this.lamp.material.color.copy(this.#happyHour ? PALETTE.hhGold : PALETTE.amber).multiplyScalar(2.2 * breathe + 3 * this.#lampFlash);
+    this.crescent.material.color.copy(glowColor).multiplyScalar(2.4 * breathe);
+    this.baseDome.material.color.copy(glowColor).multiplyScalar(1.6 * breathe);
 
     if (this.highlight.visible) this.highlight.material.opacity = 0.1 + 0.07 * Math.sin(t * 7);
+    if (this.topSlotMarker.visible) this.topSlotMarker.material.opacity = 0.16 + 0.1 * Math.sin(t * 4);
     this.#updateNeon(t);
   }
 
@@ -175,6 +204,14 @@ export class WheelModel {
     this.highlight.position.z = 0.01;
     this.highlight.visible = false;
     rotating.add(this.highlight);
+
+    this.topSlotMarker = new THREE.Mesh(
+      new THREE.RingGeometry(1, 2, 8, 1, 0, 0.1),
+      new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false }),
+    );
+    this.topSlotMarker.position.z = 0.012;
+    this.topSlotMarker.visible = false;
+    rotating.add(this.topSlotMarker);
 
     this.goldMaterial = vinylMaterial({ color: PALETTE.gold, roughness: 0.5, rimStrength: 1.1 });
 
@@ -288,19 +325,21 @@ export class WheelModel {
   }
 
   /** Borchie oro sui confini degli spicchi: sono anche i pioli contro cui sbatte il puntatore. */
-  #buildStuds(count) {
+  #buildStuds() {
     if (this.studs) {
       this.rotating.remove(this.studs);
+      this.studs.geometry.dispose();
       this.studs.dispose();
     }
-    const studs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.11, 20, 14), this.goldMaterial, count);
+    const count = this.layout.length;
+    const studs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.11, 20, 14), this.goldMaterial, Math.max(1, count));
     const m = new THREE.Matrix4();
-    const s = TAU / count;
     for (let i = 0; i < count; i++) {
-      const a = Math.PI / 2 + i * s; // confine dello spicchio i (da +X)
+      const a = Math.PI / 2 + this.layout[i].start; // confine dello spicchio i (da +X)
       m.makeTranslation(Math.cos(a) * GOLD_RING_R, Math.sin(a) * GOLD_RING_R, 0.24);
       studs.setMatrixAt(i, m);
     }
+    studs.count = count;
     studs.castShadow = true;
     studs.receiveShadow = true;
     // ruotano con la ruota: dentro il gruppo rotante, davanti all'anello fisso
@@ -308,53 +347,56 @@ export class WheelModel {
     this.rotating.add(studs);
   }
 
-  /** Filo neon ambra: un arco per spicchio (un solo draw call), così possiamo animarli uno a uno. */
-  #buildNeonArcs(count) {
+  /**
+   * Filo neon: un arco per spicchio, lungo quanto lo spicchio (che può essere espanso).
+   * Mesh separate (12 draw call) perché ogni arco ha lunghezza e colore propri.
+   */
+  #buildNeonArcs() {
     if (this.neonArcs) {
       this.rotating.remove(this.neonArcs);
-      this.neonArcs.geometry.dispose();
-      this.neonArcs.dispose();
+      this.neonArcs.traverse((o) => {
+        o.geometry?.dispose();
+        o.material?.dispose();
+      });
     }
-    const s = TAU / count;
-    const arc = new THREE.TorusGeometry(NEON_R, 0.03, 8, 24, s * 0.86);
-    const arcs = new THREE.InstancedMesh(arc, new THREE.MeshBasicMaterial({ color: 0xffffff }), count);
-    const m = new THREE.Matrix4();
-    for (let i = 0; i < count; i++) {
-      m.makeRotationZ(Math.PI / 2 + i * s + s * 0.07);
-      m.setPosition(0, 0, 0.05);
-      arcs.setMatrixAt(i, m);
-      arcs.setColorAt(i, PALETTE.amber);
+    this.neonArcs = new THREE.Group();
+    for (const { start, end } of this.layout) {
+      const span = end - start;
+      const arc = new THREE.Mesh(new THREE.TorusGeometry(NEON_R, 0.03, 8, 24, span * 0.86), new THREE.MeshBasicMaterial({ color: PALETTE.amber.clone() }));
+      arc.rotation.z = Math.PI / 2 + start + span * 0.07;
+      arc.position.z = 0.05;
+      this.neonArcs.add(arc);
     }
-    arcs.castShadow = false;
-    this.neonArcs = arcs;
-    this.rotating.add(arcs);
+    this.rotating.add(this.neonArcs);
   }
 
   #updateNeon(t) {
     if (!this.neonArcs) return;
     const { mode, color, since } = this.#lights;
-    const n = this.neonArcs.count;
+    const arcs = this.neonArcs.children;
     const c = this.#tmpColor;
-    for (let i = 0; i < n; i++) {
+    const hh = this.#happyHour;
+    // in Happy Hour i neon alternano viola e oro
+    const base = (i) => (hh ? (i % 2 ? PALETTE.violet : PALETTE.hhGold) : PALETTE.amber);
+    for (let i = 0; i < arcs.length; i++) {
       if (mode === 'spin') {
         // onda di luce che rincorre gli spicchi
         const k = (Math.sin(i * 1.1 + t * 16) + 1) / 2;
-        c.copy(PALETTE.amber).multiplyScalar(0.4 + 3.2 * k ** 3);
+        c.copy(base(i)).multiplyScalar(0.4 + 3.2 * k ** 3);
       } else if (mode === 'win') {
         const winner = i === this.highlightIndex;
         const on = Math.floor((t - since) * 6) % 2 === 0;
-        c.copy(winner ? color : PALETTE.amber).multiplyScalar(winner ? (on ? 4 : 1.2) : 0.5);
+        c.copy(winner ? color : base(i)).multiplyScalar(winner ? (on ? 4 : 1.2) : 0.5);
       } else {
-        c.copy(PALETTE.amber).multiplyScalar(1.7 + 0.25 * Math.sin(t * 1.6 + i * 0.8));
+        c.copy(base(i)).multiplyScalar((hh ? 2.4 : 1.7) + 0.25 * Math.sin(t * (hh ? 4 : 1.6) + i * 0.8));
       }
-      this.neonArcs.setColorAt(i, c);
+      arcs[i].material.color.copy(c);
     }
-    this.neonArcs.instanceColor.needsUpdate = true;
 
     // LED del piedistallo: equalizzatore durante lo spin, fissi altrimenti
     for (let i = 0; i < 3; i++) {
       const level = mode === 'spin' ? (Math.sin(t * (9 + i * 3) + i) + 1) / 2 : 0.8;
-      c.copy(PALETTE.amber).multiplyScalar(0.3 + 2.4 * level);
+      c.copy(hh ? PALETTE.violet : PALETTE.amber).multiplyScalar(0.3 + 2.4 * level);
       this.leds.setColorAt(i, c);
     }
     this.leds.instanceColor.needsUpdate = true;
