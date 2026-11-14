@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -50 100 100">
+  <rect x="-50" y="-50" width="100" height="100" rx="22" fill="#0b0420"/>
+  <g transform="translate(0 4)">
+    <path d="M0 0 L0.00 -36.00 A36 36 0 0 0 -18.00 -31.18 Z" fill="#00e5ff"/>
+    <path d="M0 0 L-18.00 -31.18 A36 36 0 0 0 -31.18 -18.00 Z" fill="#ff2bd6"/>
+    <path d="M0 0 L-31.18 -18.00 A36 36 0 0 0 -36.00 -0.00 Z" fill="#ffd400"/>
+    <path d="M0 0 L-36.00 -0.00 A36 36 0 0 0 -31.18 18.00 Z" fill="#00e5ff"/>
+    <path d="M0 0 L-31.18 18.00 A36 36 0 0 0 -18.00 31.18 Z" fill="#ff2bd6"/>
+    <path d="M0 0 L-18.00 31.18 A36 36 0 0 0 0.00 36.00 Z" fill="#ffd400"/>
+    <path d="M0 0 L-0.00 36.00 A36 36 0 0 0 18.00 31.18 Z" fill="#00e5ff"/>
+    <path d="M0 0 L18.00 31.18 A36 36 0 0 0 31.18 18.00 Z" fill="#ff2bd6"/>
+    <path d="M0 0 L31.18 18.00 A36 36 0 0 0 36.00 0.00 Z" fill="#ffd400"/>
+    <path d="M0 0 L36.00 0.00 A36 36 0 0 0 31.18 -18.00 Z" fill="#00e5ff"/>
+    <path d="M0 0 L31.18 -18.00 A36 36 0 0 0 18.00 -31.18 Z" fill="#ff2bd6"/>
+    <path d="M0 0 L18.00 -31.18 A36 36 0 0 0 0.00 -36.00 Z" fill="#ffd400"/>
+    <circle r="38" fill="none" stroke="#8a2be2" stroke-width="5"/>
+    <circle r="7" fill="#ffd36b"/>
+  </g>
+  <path d="M-7 -46 L7 -46 L0 -28 Z" fill="#ff3366"/>
+</svg>
