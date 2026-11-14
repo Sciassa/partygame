@@ -2,12 +2,8 @@ import { MAX_NAME_LENGTH, MAX_PLAYERS } from '../../shared/config.js';
 import { PHASE } from '../../shared/protocol.js';
 import { createBaseSegments } from '../../shared/wheel/segments.js';
 import { TAU, mod } from '../../shared/wheel/kinematics.js';
-
-/** 12 colori neon ben distinguibili, uno per giocatore. */
-export const PLAYER_COLORS = [
-  '#ff2bd6', '#00e5ff', '#ffd400', '#7cff4f', '#ff7a00', '#9b5cff',
-  '#ff3b3b', '#00ffa8', '#ff9ad5', '#4d7cff', '#ffffff', '#c6ff00',
-];
+import { BEERS, getBeer, isBeerId } from '../../shared/avatars/beers.js';
+import { randomInt } from '../../shared/util/random.js';
 
 const STARTING_COINS = 100;
 
@@ -20,7 +16,7 @@ export class GameState {
     this.mode = mode;
     this.roomCode = roomCode;
     this.phase = PHASE.IDLE;
-    /** @type {Array<{id:string, clientId:string, name:string, color:string, coins:number, connected:boolean, isOwner:boolean}>} */
+    /** @type {Array<{id:string, clientId:string, name:string, beer:string, color:string, coins:number, connected:boolean, isOwner:boolean}>} */
     this.players = [];
     this.turnPlayerId = null;
     this.segments = createBaseSegments();
@@ -54,11 +50,13 @@ export class GameState {
       return { player, rejoined: true };
     }
     const n = this.nextPlayerNumber++;
+    const beer = this.#randomFreeBeer();
     player = {
       id: `p${n}`,
       clientId,
       name,
-      color: PLAYER_COLORS[(n - 1) % PLAYER_COLORS.length],
+      beer: beer.id,
+      color: beer.accent, // il colore del giocatore è quello della sua birra
       coins: STARTING_COINS,
       connected: true,
       isOwner,
@@ -72,6 +70,32 @@ export class GameState {
     const player = this.getPlayer(playerId);
     if (player) player.connected = connected;
     return player;
+  }
+
+  /** Birre non ancora prese da nessuno (anche da giocatori momentaneamente disconnessi). */
+  freeBeers() {
+    const taken = new Set(this.players.map((p) => p.beer));
+    return BEERS.filter((b) => !taken.has(b.id));
+  }
+
+  /**
+   * Cambio birra richiesto dal giocatore. Ogni birra è unica nella stanza.
+   * @returns {'ok'|'invalid'|'taken'}
+   */
+  setBeer(playerId, beerId) {
+    const player = this.getPlayer(playerId);
+    if (!player || !isBeerId(beerId)) return 'invalid';
+    if (player.beer === beerId) return 'ok';
+    if (this.players.some((p) => p.id !== playerId && p.beer === beerId)) return 'taken';
+    player.beer = beerId;
+    player.color = getBeer(beerId).accent;
+    return 'ok';
+  }
+
+  #randomFreeBeer() {
+    const free = this.freeBeers();
+    // MAX_PLAYERS === BEERS.length, quindi c'è sempre una birra libera
+    return free.length ? free[randomInt(0, free.length - 1)] : BEERS[randomInt(0, BEERS.length - 1)];
   }
 
   connectedPlayers() {

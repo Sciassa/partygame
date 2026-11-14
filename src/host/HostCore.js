@@ -1,12 +1,12 @@
 import { Emitter } from '../shared/Emitter.js';
 import { CONNECTION_TIMEOUT_MS, HEARTBEAT_MS } from '../shared/config.js';
 import { MSG, PHASE, PROTOCOL_VERSION, REJECT_REASON } from '../shared/protocol.js';
-import { segmentIndexAt } from '../shared/wheel/kinematics.js';
 import { SEGMENT_TYPE, segmentInfo } from '../shared/wheel/segments.js';
 import { randomInt } from '../shared/util/random.js';
 import { HostPeer } from './net/HostPeer.js';
 import { GameState } from './state/GameState.js';
-import { planSpin } from './physics/WheelPhysics.js';
+import { planSpin, resolveStop } from './physics/WheelPhysics.js';
+import { getBeer } from '../shared/avatars/beers.js';
 
 const HELLO_TIMEOUT_MS = 8000;
 const RESULT_HOLD_MS = 4500;
@@ -57,16 +57,21 @@ export class HostCore extends Emitter {
   }
 
   /**
-   * Richiesta di girare la ruota. Accettata solo se siamo in IDLE e chi chiede è di turno.
-   * `force` (tastiera dello schermo Salotto) bypassa il controllo del turno: utile per demo/test.
+   * Richiesta di girare la ruota con una certa forza (0..1).
+   * Accettata solo se siamo in IDLE e chi chiede è di turno.
+   * `bypassTurn` (tastiera dello schermo Salotto) salta il controllo del turno: utile per demo/test.
    */
-  requestSpin(playerId, power, { force = false } = {}) {
+  requestSpin(playerId, force, { bypassTurn = false } = {}) {
     const state = this.state;
     if (state.phase !== PHASE.IDLE) return false;
-    if (!force && playerId !== state.turnPlayerId) return false;
+    if (!bypassTurn && playerId !== state.turnPlayerId) return false;
 
-    const plan = { id: ++this.#spinSeq, ...planSpin(state.wheelAngle, power, state.segments.length) };
-    const spinner = force ? (state.turnPlayerId ?? null) : playerId;
+    const plan = { id: ++this.#spinSeq, ...planSpin(state.wheelAngle, force) };
+    const spinner = bypassTurn ? (state.turnPlayerId ?? null) : playerId;
+    console.info(
+      `[ruota] lancio #${plan.id}: forza ${(plan.force * 100).toFixed(0)}% → ω0 ${plan.omega0.toFixed(2)} rad/s, ` +
+        `arresto previsto in ${(plan.duration / 1000).toFixed(2)} s dopo ${(Math.abs(plan.to - plan.from) / (2 * Math.PI)).toFixed(2)} giri`,
+    );
     state.startSpin(plan, spinner, performance.now());
 
     this.broadcast({ t: MSG.SPIN_START, plan, elapsed: 0, playerId: spinner });
@@ -141,7 +146,7 @@ export class HostCore extends Emitter {
 
     const { player, rejoined } = state.joinPlayer(msg.clientId, msg.name, { isOwner: session.isOwner });
     session.playerId = player.id;
-    link.send({ t: MSG.WELCOME, playerId: player.id, mode: this.mode, roomCode: state.roomCode });
+    link.send({ t: MSG.WELCOME, playerId: player.id, mode: this.mode, roomCode: state.roomCode, rejoined });
     this.#broadcastState();
     this.emit('player-joined', player, rejoined);
   }
@@ -149,8 +154,17 @@ export class HostCore extends Emitter {
   #onMessage(session, msg) {
     switch (msg.t) {
       case MSG.SPIN_REQUEST:
-        this.requestSpin(session.playerId, msg.power);
+        this.requestSpin(session.playerId, msg.force);
         break;
+      case MSG.AVATAR_PICK: {
+        const outcome = this.state.setBeer(session.playerId, msg.beerId);
+        if (outcome === 'taken') session.link.send({ t: MSG.TOAST, text: `${getBeer(msg.beerId).name} è già di un altro giocatore` });
+        if (outcome === 'ok') {
+          this.#broadcastState();
+          this.emit('avatar-changed', this.state.getPlayer(session.playerId));
+        }
+        break;
+      }
       case MSG.PONG:
         if (typeof msg.ts === 'number') session.rtt = performance.now() - msg.ts;
         break;
@@ -201,12 +215,18 @@ export class HostCore extends Emitter {
   #resolveSpin() {
     const state = this.state;
     const { plan, playerId } = state.spin;
-    const index = segmentIndexAt(plan.to, state.segments.length);
-    if (index !== plan.targetIndex) console.error('[host] spin atterrato su uno spicchio inatteso', index, plan);
+    const stop = resolveStop(plan.to, state.segments.length);
+    const index = stop.index;
 
     const segment = state.segments[index];
     const info = segmentInfo(segment);
     const player = state.getPlayer(playerId);
+    console.info(
+      `[ruota] lancio #${plan.id} FERMO sullo spicchio #${index} → ${info.label}` +
+        (player ? ` (lanciato da ${player.name})` : ' (demo)') +
+        ` | angolo ruota ${plan.to.toFixed(4)} rad, puntatore a ${stop.pointerLocalDeg.toFixed(2)}° sulla ruota` +
+        `, ${(stop.offsetInSegment * 100).toFixed(1)}% dentro lo spicchio${stop.nearEdge ? ' (sul filo!)' : ''}`,
+    );
     const result = { spinId: plan.id, segmentIndex: index, type: segment.type, playerId, coinsDelta: 0, text: info.description };
 
     // Placeholder di risoluzione: i veri eventi (trivia, minigiochi, adesivi) arriveranno nei prossimi step.

@@ -3,7 +3,7 @@
  * Ogni messaggio è un oggetto JSON con un campo `t` (tipo). L'host è l'unica fonte di verità:
  * i client inviano solo "intenzioni" (es. SPIN_REQUEST) e ricevono lo stato autoritativo.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export const MODE = Object.freeze({
   /** Schermo grande (TV/PC) = host + render 3D; i telefoni sono solo controller. */
@@ -21,14 +21,15 @@ export const PHASE = Object.freeze({
 export const MSG = Object.freeze({
   // client -> host
   HELLO: 'hello', // { v, clientId, name }
-  SPIN_REQUEST: 'spin:req', // { power: 0..1 }
+  SPIN_REQUEST: 'spin:req', // { force: 0..1 } forza del lancio (swipe o tasto)
+  AVATAR_PICK: 'avatar:pick', // { beerId } il giocatore sceglie la sua birra
   PONG: 'pong', // { ts }
 
   // host -> client
-  WELCOME: 'welcome', // { playerId, mode, roomCode }
+  WELCOME: 'welcome', // { playerId, mode, roomCode, rejoined }
   REJECT: 'reject', // { reason }
   STATE: 'state', // { s: snapshot pubblico }
-  SPIN_START: 'spin:start', // { plan, elapsed }
+  SPIN_START: 'spin:start', // { plan, elapsed, playerId } plan = parametri fisici dello spin
   SPIN_RESULT: 'spin:result', // { result }
   PING: 'ping', // { ts }
   TOAST: 'toast', // { text }

@@ -1,9 +1,9 @@
-/* ===== Controller sul telefono ===== */
+/* ===== Controller sul telefono: dark, minimale, bersagli enormi ===== */
 .ctl {
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.6rem;
   padding: 0.5rem 16px 0.75rem;
 }
 
@@ -12,62 +12,88 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
-  min-height: 52px;
-  padding: 0.3rem 0.3rem 0.3rem 1rem;
-  border-radius: 999px;
-  background: var(--surface);
-  border: 2px solid color-mix(in srgb, var(--me, #fff) 60%, transparent);
+  min-height: 56px;
+  padding: 0.35rem 0.35rem 0.35rem 0.5rem;
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
 }
 
 .me {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.6rem;
   min-width: 0;
-  font-family: var(--font-display);
-  font-weight: 900;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.me:active {
+  background: var(--surface-strong);
+}
+
+.me-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
 }
 
 .me-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.05rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--me, var(--text));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.me-beer {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 .coins {
   font-family: var(--font-display);
-  font-weight: 900;
-  color: var(--yellow);
-  text-shadow: 0 0 10px rgba(255, 212, 0, 0.5);
+  font-weight: 600;
+  font-size: 1.15rem;
+  color: var(--amber);
   white-space: nowrap;
 }
 
 .room-badge {
-  padding: 0.35rem 0.8rem;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.35);
+  padding: 0.4rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.3);
   font-family: var(--font-display);
-  font-weight: 900;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.2em;
   color: var(--muted);
 }
 
 .ctl-wheel {
   position: relative;
-  flex: 1 1 46%;
+  flex: 1 1 48%;
   min-height: 0;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   overflow: hidden;
+  border: 1px solid var(--border);
 }
 
 .ctl-panel {
-  flex: 1 1 54%;
+  flex: 1 1 52%;
   min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.8rem;
+  gap: 0.7rem;
   text-align: center;
 }
 
@@ -76,12 +102,7 @@
 }
 
 .panel-title {
-  font-size: 1.6rem;
-}
-
-.panel-title.glow {
-  color: var(--me, #fff);
-  text-shadow: 0 0 18px var(--me, #fff);
+  font-size: 1.9rem;
 }
 
 .ctl-players {
@@ -99,24 +120,20 @@
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.4rem;
   flex: none;
   padding: 0.35rem 0.7rem;
-  border-radius: 999px;
+  border-radius: 10px;
   background: var(--surface);
-  border: 2px solid transparent;
-  font-size: 0.85rem;
-  font-weight: 700;
+  border: 1px solid var(--border);
+  font-size: 0.82rem;
+  font-weight: 600;
   white-space: nowrap;
-}
-
-.chip .player-dot {
-  width: 10px;
-  height: 10px;
 }
 
 .chip.turn {
   border-color: var(--pc);
+  color: var(--pc);
 }
 
 .chip.offline {
@@ -130,104 +147,144 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.8rem;
+  gap: 0.6rem;
 }
 
 .swipe-zone {
+  position: relative;
   flex: 1;
-  min-height: 120px;
+  min-height: 150px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.4rem;
-  border-radius: var(--radius);
-  border: 3px dashed color-mix(in srgb, var(--me, #fff) 70%, transparent);
-  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--me, #fff) 22%, transparent), transparent 70%);
+  gap: 0.35rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  background:
+    radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--me, var(--amber)) 14%, transparent), transparent 65%),
+    var(--bg-2);
   touch-action: none; /* il gesto è nostro, niente scroll */
   cursor: grab;
+  overflow: hidden;
   transition:
-    background 0.15s,
+    border-color 0.15s,
     transform 0.1s;
 }
 
 .swipe-zone.active {
-  transform: scale(0.98);
-  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--me, #fff) 40%, transparent), transparent 75%);
+  border-color: var(--me, var(--amber));
+  transform: scale(0.99);
 }
 
-.swipe-arrow {
-  font-size: 4.5rem;
-  line-height: 1;
-  color: var(--me, #fff);
-  text-shadow: 0 0 20px var(--me, #fff);
+/* manopola che segue il dito */
+.swipe-dial {
+  position: relative;
+  width: min(42vw, 150px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--me, var(--amber)) 70%, transparent);
+  box-shadow:
+    0 0 40px -6px color-mix(in srgb, var(--me, var(--amber)) 55%, transparent),
+    inset 0 0 30px rgba(0, 0, 0, 0.5);
+  background: repeating-conic-gradient(from 0deg, rgba(244, 234, 213, 0.06) 0 15deg, transparent 15deg 30deg);
   pointer-events: none;
-  animation: nudge 1.4s ease-in-out infinite;
+  animation: dial-idle 3.2s ease-in-out infinite;
 }
 
-.swipe-zone.active .swipe-arrow {
+.swipe-zone.active .swipe-dial,
+.spin-pad.fired .swipe-dial {
   animation: none;
 }
 
-@keyframes nudge {
-  50% { transform: translateX(14px) rotate(25deg); }
+.swipe-dial-mark {
+  position: absolute;
+  top: 8%;
+  left: 50%;
+  width: 6px;
+  height: 22%;
+  margin-left: -3px;
+  border-radius: 3px;
+  background: var(--me, var(--amber));
+}
+
+@keyframes dial-idle {
+  50% { transform: rotate(40deg); }
 }
 
 .swipe-label {
+  margin-top: 0.6rem;
   font-family: var(--font-display);
-  font-weight: 900;
-  font-size: 1.3rem;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  font-size: 1.45rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   pointer-events: none;
 }
 
-.btn-spin {
-  position: relative;
-  width: 100%;
-  min-height: 84px;
+.swipe-hint {
+  font-size: 0.8rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.force-value {
+  position: absolute;
+  top: 0.9rem;
+  right: 1.1rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.6rem;
+  color: var(--me, var(--amber));
+  pointer-events: none;
+}
+
+.force-bar {
+  --force: 0;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-strong);
   overflow: hidden;
-  background: linear-gradient(180deg, #ffe45c, var(--yellow) 55%, #d49e00);
-  color: #2a0b52;
-  box-shadow:
-    0 6px 0 #8a5a00,
-    0 0 24px rgba(255, 212, 0, 0.45);
+}
+
+.force-bar-fill {
+  height: 100%;
+  width: 100%;
+  transform: scaleX(var(--force));
+  transform-origin: left;
+  background: linear-gradient(90deg, var(--gold), var(--amber) 60%, var(--neon));
+  transition: transform 0.05s linear;
+}
+
+.btn-spin {
+  width: 100%;
+  min-height: 76px;
   touch-action: none;
 }
 
 .btn-spin.charging {
-  transform: translateY(4px);
-  box-shadow: 0 2px 0 #8a5a00;
+  border-color: var(--amber);
+  background: rgba(255, 181, 71, 0.12);
+  transform: scale(0.98);
 }
 
 .btn-spin-label {
-  position: relative;
-  z-index: 1;
-  font-size: 1.4rem;
-}
-
-.power-meter {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 100%;
-  pointer-events: none;
-}
-
-.power-fill {
-  height: 100%;
-  background: linear-gradient(90deg, rgba(0, 229, 255, 0.55), rgba(255, 43, 214, 0.75));
-  transform: scaleX(0);
-  transform-origin: left;
+  font-size: 1.05rem;
 }
 
 .spin-pad.fired {
-  opacity: 0.45;
+  opacity: 0.55;
   pointer-events: none;
 }
 
-.spin-anim {
-  animation: spin 0.7s linear infinite;
+.spinner-ring {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--amber);
+  border-right-color: var(--amber);
+  animation: spin 0.6s linear infinite;
 }
 
 .result-card {
@@ -236,40 +293,37 @@
   flex-direction: column;
   align-items: center;
   gap: 0.4rem;
-  padding: 1.5rem 1rem;
-  border-radius: var(--radius);
-  border: 3px solid var(--sc, #fff);
-  background: color-mix(in srgb, var(--sc, #fff) 12%, transparent);
-  box-shadow: 0 0 30px color-mix(in srgb, var(--sc, #fff) 40%, transparent);
-  animation: pop 0.35s cubic-bezier(0.2, 1.6, 0.4, 1);
-}
-
-.result-card .result-emoji {
-  font-size: 3.5rem;
-  line-height: 1;
+  padding: 1.6rem 1rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in srgb, var(--sc) 60%, transparent);
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--sc) 20%, transparent), transparent 70%),
+    var(--bg-2);
+  animation: pop 0.35s cubic-bezier(0.2, 1.4, 0.4, 1);
 }
 
 .result-card .result-label {
   font-family: var(--font-display);
-  font-weight: 900;
-  font-size: 2rem;
+  font-weight: 700;
+  font-size: 2.4rem;
+  letter-spacing: 0.06em;
   color: var(--sc);
-  text-shadow: 0 0 16px var(--sc);
 }
 
 .result-card .result-text {
-  font-weight: 700;
+  font-weight: 600;
+  color: var(--muted);
 }
 
 .result-coins {
   font-family: var(--font-display);
-  font-weight: 900;
-  font-size: 1.8rem;
-  color: var(--yellow);
+  font-weight: 700;
+  font-size: 2rem;
+  color: var(--amber);
 }
 
 @keyframes pop {
-  from { transform: scale(0.6); opacity: 0; }
+  from { transform: scale(0.85); opacity: 0; }
 }
 
 .ctl-reconnect {
@@ -281,14 +335,69 @@
   align-items: center;
   justify-content: center;
   gap: 1rem;
-  background: rgba(5, 0, 15, 0.82);
+  background: rgba(4, 6, 12, 0.85);
   backdrop-filter: blur(4px);
   font-family: var(--font-display);
-  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .ctl-reconnect.show {
   display: flex;
+}
+
+/* ----- Selettore birra ----- */
+.beer-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.5rem;
+}
+
+.beer-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 0.7rem;
+  align-items: center;
+  padding: 0.7rem;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.beer-option .beer-icon {
+  grid-row: 1 / span 2;
+}
+
+.beer-option-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.beer-option-sub {
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.25;
+}
+
+.beer-option.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.beer-option:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+.beer-option:not(:disabled):active {
+  transform: scale(0.97);
 }
 
 /* Pocket in orizzontale: ruota a sinistra, controlli a destra */

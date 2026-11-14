@@ -11,8 +11,8 @@ import { resolve } from 'node:path';
 const OUT = resolve(import.meta.dirname, '../public/icons');
 mkdirSync(OUT, { recursive: true });
 
-const BG = [11, 4, 32];
-const SEGMENTS = [[0, 229, 255], [255, 43, 214], [255, 212, 0]];
+const BG = [10, 14, 23]; // blu notte
+const SEGMENTS = [[31, 127, 134], [158, 39, 66], [201, 138, 30]]; // trivia, minigioco, fortuna
 const N = 12;
 const TAU = Math.PI * 2;
 
@@ -29,7 +29,7 @@ function shade(x, y, { rounded, scale }) {
   // alone magenta
   const d0 = Math.hypot(x, y);
   const glow = Math.max(0, 1 - d0 / (1.05 * scale)) ** 2 * 0.55;
-  color = mix(color, [255, 43, 214, 1], glow);
+  color = mix(color, [255, 170, 90, 1], glow * 0.7); // alone ambra
 
   const px = x / scale;
   const py = (y + 0.08 * scale) / scale; // ruota leggermente in basso, puntatore sopra
@@ -45,24 +45,24 @@ function shade(x, y, { rounded, scale }) {
     color = [base[0] * k, base[1] * k, base[2] * k, 1];
     // separatori
     const edge = Math.min(local, 1 - local) * (TAU / N) * d;
-    if (edge < 0.012 && d > 0.17) color = [255, 246, 214, 1];
+    if (edge < 0.012 && d > 0.17) color = [212, 162, 76, 1]; // separatori ottone
     // hub
-    if (d < 0.17) color = d < 0.11 ? [255, 43, 214, 1] : [255, 211, 107, 1];
+    if (d < 0.17) color = d < 0.11 ? [200, 29, 67, 1] : [201, 154, 75, 1];
   } else if (d <= R + 0.09) {
-    // cornice viola con lampadine
-    color = [138, 43, 226, 1];
+    // cornice nera opaca con lampadine ambra
+    color = [20, 20, 26, 1];
     const a = (Math.atan2(py, px) + TAU) % TAU;
     const bulb = a / (TAU / 24);
     const db = Math.abs(bulb - Math.round(bulb)) * (TAU / 24) * (R + 0.045);
     const dr = Math.abs(d - (R + 0.045));
-    if (Math.hypot(db, dr) < 0.028) color = [255, 255, 255, 1];
+    if (Math.hypot(db, dr) < 0.028) color = [255, 190, 110, 1];
   } else if (Math.abs(d - (R + 0.15)) < 0.018) {
-    color = [0, 240, 255, 1]; // anello neon
+    color = [255, 61, 127, 1]; // anello neon
   }
 
   // puntatore (triangolo rosso in alto)
   const ty = (py - (R + 0.02)) / 0.24; // 0 = punta, 1 = base
-  if (ty >= 0 && ty <= 1 && Math.abs(px) <= ty * 0.13) color = [255, 51, 102, 1];
+  if (ty >= 0 && ty <= 1 && Math.abs(px) <= ty * 0.13) color = [244, 234, 213, 1]; // puntatore crema
   return color;
 }
 
@@ -152,19 +152,20 @@ for (const [file, size, opts] of icons) {
 writeFileSync(
   resolve(OUT, '../favicon.svg'),
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -50 100 100">
-  <rect x="-50" y="-50" width="100" height="100" rx="22" fill="#0b0420"/>
+  <rect x="-50" y="-50" width="100" height="100" rx="22" fill="#0a0e17"/>
   <g transform="translate(0 4)">
     ${Array.from({ length: N }, (_, i) => {
       const a0 = -Math.PI / 2 - (i * TAU) / N;
       const a1 = a0 - TAU / N;
       const p = (a) => `${(Math.cos(a) * 36).toFixed(2)} ${(Math.sin(a) * 36).toFixed(2)}`;
-      const c = ['#00e5ff', '#ff2bd6', '#ffd400'][i % 3];
+      const c = ['#1f7f86', '#9e2742', '#c98a1e'][i % 3];
       return `<path d="M0 0 L${p(a0)} A36 36 0 0 0 ${p(a1)} Z" fill="${c}"/>`;
     }).join('\n    ')}
-    <circle r="38" fill="none" stroke="#8a2be2" stroke-width="5"/>
-    <circle r="7" fill="#ffd36b"/>
+    <circle r="38" fill="none" stroke="#14141a" stroke-width="5"/>
+    <circle r="42" fill="none" stroke="#ff3d7f" stroke-width="1.5"/>
+    <circle r="7" fill="#c99a4b"/>
   </g>
-  <path d="M-7 -46 L7 -46 L0 -28 Z" fill="#ff3366"/>
+  <path d="M-7 -46 L7 -46 L0 -28 Z" fill="#f4ead5"/>
 </svg>
 `,
 );

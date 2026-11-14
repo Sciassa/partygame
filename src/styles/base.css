@@ -1,20 +1,26 @@
-/* ===== Token di design (neon pop). Verranno rifiniti sugli screenshot di reference. ===== */
+/* ===== Token di design: "Modern Pub" in dark mode =====
+ * Fondo blu notte, testo crema, accenti ambra/oro e un solo neon (rosa) usato con parsimonia.
+ * Tenuti allineati ai colori 3D in shared/stage/PubSet.js. */
 :root {
-  --bg: #0b0420;
-  --bg-2: #1a0838;
-  --surface: rgba(255, 255, 255, 0.06);
-  --surface-strong: rgba(255, 255, 255, 0.12);
-  --border: rgba(255, 255, 255, 0.14);
-  --text: #ffffff;
-  --muted: rgba(255, 255, 255, 0.65);
-  --pink: #ff2bd6;
-  --cyan: #00e5ff;
-  --yellow: #ffd400;
-  --green: #7cff4f;
-  --danger: #ff3b5c;
-  --radius: 22px;
-  --font: 'Arial Rounded MT Bold', 'Nunito', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-display: 'Arial Black', 'Arial Rounded MT Bold', system-ui, sans-serif;
+  --bg: #0a0e17;
+  --bg-2: #111725;
+  --bg-3: #182033;
+  --surface: rgba(244, 234, 213, 0.04);
+  --surface-strong: rgba(244, 234, 213, 0.08);
+  --border: rgba(244, 234, 213, 0.12);
+  --border-strong: rgba(244, 234, 213, 0.22);
+  --text: #f4ead5;
+  --muted: rgba(244, 234, 213, 0.58);
+  --amber: #ffb547;
+  --gold: #d4a24c;
+  --neon: #ff3d7f;
+  --teal: #2fd6c3;
+  --danger: #ff5a5a;
+  --ok: #57d982;
+  --radius: 18px;
+  --radius-lg: 26px;
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-display: 'Oswald', 'Arial Narrow', 'Roboto Condensed', system-ui, sans-serif;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
@@ -48,15 +54,14 @@ body {
 
 body {
   background:
-    radial-gradient(120% 80% at 50% 0%, #2b0a5c 0%, transparent 60%),
-    radial-gradient(80% 60% at 100% 100%, rgba(255, 43, 214, 0.18) 0%, transparent 60%),
+    radial-gradient(90% 60% at 50% -10%, rgba(255, 181, 71, 0.1) 0%, transparent 60%),
+    radial-gradient(70% 50% at 100% 110%, rgba(255, 61, 127, 0.07) 0%, transparent 60%),
     var(--bg);
 }
 
 #app {
   position: fixed;
   inset: 0;
-  /* dvh: altezza reale con le barre del browser mobile */
   height: 100dvh;
   padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
   overflow: hidden;
@@ -78,8 +83,9 @@ h2,
 h3 {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 900;
-  letter-spacing: 0.02em;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
 }
 
 p {
@@ -98,91 +104,102 @@ p {
   display: none !important;
 }
 
-/* ===== Bottoni: grandi, "pillola", impossibili da mancare ===== */
+/* Etichetta piccola maiuscola in oro: il "sopratitolo" usato ovunque */
+.eyebrow {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 0.78rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+/* ===== Bottoni: grandi, netti, impossibili da mancare ===== */
 .btn {
   appearance: none;
-  border: 0;
-  border-radius: 999px;
-  padding: 0.9em 1.6em;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  padding: 0.85em 1.5em;
   min-height: 56px;
   font-family: var(--font-display);
-  font-weight: 900;
-  font-size: 1.1rem;
-  letter-spacing: 0.04em;
+  font-weight: 600;
+  font-size: 1.05rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   cursor: pointer;
   background: var(--surface-strong);
   color: var(--text);
   transition:
     transform 0.08s ease,
-    filter 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease,
     box-shadow 0.15s ease;
 }
 
 .btn:active {
-  transform: scale(0.96);
+  transform: scale(0.97);
 }
 
 .btn:focus-visible {
-  outline: 3px solid var(--cyan);
+  outline: 2px solid var(--amber);
   outline-offset: 3px;
 }
 
 .btn-primary {
-  background: linear-gradient(180deg, #ff5be3 0%, var(--pink) 55%, #c4009f 100%);
+  border-color: transparent;
+  background: linear-gradient(180deg, #ffc76b 0%, var(--amber) 100%);
+  color: #1a1206;
   box-shadow:
-    0 6px 0 #7d0066,
-    0 0 26px rgba(255, 43, 214, 0.55);
-  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
-}
-
-.btn-primary:active {
-  transform: translateY(4px);
-  box-shadow:
-    0 2px 0 #7d0066,
-    0 0 18px rgba(255, 43, 214, 0.5);
+    0 10px 30px -10px rgba(255, 181, 71, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 .btn-ghost {
   background: transparent;
-  border: 2px solid var(--border);
 }
 
 .btn-small {
   min-height: 40px;
-  padding: 0.4em 1em;
-  font-size: 0.9rem;
+  padding: 0.4em 0.9em;
+  font-size: 0.85rem;
 }
 
 .btn-huge {
   width: 100%;
-  min-height: 76px;
-  font-size: 1.6rem;
+  min-height: 72px;
+  font-size: 1.35rem;
 }
 
 .input {
   width: 100%;
-  min-height: 60px;
+  min-height: 58px;
   padding: 0 1.1rem;
-  border-radius: 18px;
-  border: 2px solid var(--border);
-  background: rgba(0, 0, 0, 0.35);
-  font-size: 1.25rem;
-  font-weight: 700;
+  border-radius: 14px;
+  border: 1px solid var(--border-strong);
+  background: rgba(0, 0, 0, 0.3);
+  font-size: 1.15rem;
+  font-weight: 600;
   outline: none;
-  transition: border-color 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.input::placeholder {
+  color: rgba(244, 234, 213, 0.35);
 }
 
 .input:focus {
-  border-color: var(--cyan);
-  box-shadow: 0 0 18px rgba(0, 229, 255, 0.35);
+  border-color: var(--amber);
+  box-shadow: 0 0 0 3px rgba(255, 181, 71, 0.18);
 }
 
 .input-code {
   text-transform: uppercase;
-  letter-spacing: 0.35em;
+  letter-spacing: 0.4em;
   text-align: center;
   font-family: var(--font-display);
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .shake {
@@ -198,14 +215,13 @@ p {
 
 .room-code {
   font-family: var(--font-display);
-  font-weight: 900;
+  font-weight: 700;
   font-size: 3rem;
-  letter-spacing: 0.25em;
-  padding-left: 0.25em;
-  color: var(--yellow);
-  text-shadow:
-    0 0 12px rgba(255, 212, 0, 0.7),
-    0 3px 0 #8a5a00;
+  line-height: 1;
+  letter-spacing: 0.28em;
+  padding-left: 0.28em;
+  color: var(--amber);
+  text-shadow: 0 0 24px rgba(255, 181, 71, 0.35);
 }
 
 .screen-center {
@@ -219,18 +235,12 @@ p {
   text-align: center;
 }
 
-.big-emoji {
-  font-size: 4rem;
-  line-height: 1;
-}
-
 .loader {
-  width: 54px;
-  height: 54px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
-  border: 6px solid rgba(255, 255, 255, 0.12);
-  border-top-color: var(--pink);
-  border-right-color: var(--cyan);
+  border: 3px solid var(--border);
+  border-top-color: var(--amber);
   animation: spin 0.9s linear infinite;
 }
 
@@ -240,18 +250,87 @@ p {
 
 .player-dot {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  background: var(--pc, #fff);
-  box-shadow: 0 0 10px var(--pc, #fff);
+  background: var(--pc, var(--text));
   flex: none;
+}
+
+/* Moneta CSS (niente emoji: look più pulito) */
+.coin {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-left: 0.3em;
+  border-radius: 50%;
+  vertical-align: -0.05em;
+  background: radial-gradient(circle at 35% 30%, #ffe2a1, var(--amber) 45%, #a8701c 100%);
+  box-shadow: inset 0 0 0 0.08em rgba(120, 75, 10, 0.6);
+}
+
+.coin-lg {
+  width: 0.9em;
+  height: 0.9em;
+}
+
+/* ===== Iconcina bicchiere (shared/ui/beerIcon.js) ===== */
+.beer-icon {
+  --w: 18px;
+  --h: 26px;
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  flex: none;
+  width: var(--w);
+  height: var(--h);
+  border-radius: 3px 3px 6px 6px;
+  border: 1.5px solid rgba(244, 234, 213, 0.45);
+  border-top: 0;
+  overflow: hidden;
+  background: rgba(244, 234, 213, 0.06);
+}
+
+.beer-icon-foam {
+  height: 28%;
+  background: var(--foam);
+  border-radius: 0 0 40% 40% / 0 0 30% 30%;
+}
+
+.beer-icon-liquid {
+  flex: 1;
+  margin-top: -2px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--liquid) 80%, white), var(--liquid));
+}
+
+.beer-icon-xs { --w: 11px; --h: 16px; }
+.beer-icon-sm { --w: 18px; --h: 26px; }
+.beer-icon-lg { --w: 30px; --h: 44px; border-width: 2px; }
+.beer-icon-xl { --w: 46px; --h: 66px; border-width: 2px; }
+
+.beer-icon.glass-weizen,
+.beer-icon.glass-stange,
+.beer-icon.glass-pilsner {
+  width: calc(var(--w) * 0.78);
+  height: calc(var(--h) * 1.12);
+}
+
+.beer-icon.glass-mug,
+.beer-icon.glass-tumbler {
+  width: calc(var(--w) * 1.2);
+  height: calc(var(--h) * 0.85);
+  border-radius: 3px;
+}
+
+.beer-icon.glass-tulip,
+.beer-icon.glass-snifter {
+  border-radius: 4px 4px 50% 50% / 4px 4px 40% 40%;
 }
 
 .qr {
   display: block;
-  border-radius: 14px;
-  background: #fff;
+  border-radius: 12px;
+  background: var(--text);
   padding: 6px;
   max-width: 100%;
   height: auto !important;
@@ -264,16 +343,16 @@ p {
   transform: translate(-50%, calc(100% + 40px + var(--safe-bottom)));
   opacity: 0;
   max-width: calc(100% - 32px);
-  padding: 0.8rem 1.3rem;
-  border-radius: 999px;
-  background: rgba(20, 6, 45, 0.95);
-  border: 1px solid var(--border);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-  font-weight: 700;
+  padding: 0.75rem 1.2rem;
+  border-radius: 14px;
+  background: rgba(17, 23, 37, 0.96);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  font-weight: 600;
   text-align: center;
   z-index: 100;
   transition:
-    transform 0.3s cubic-bezier(0.2, 1.4, 0.4, 1),
+    transform 0.3s cubic-bezier(0.2, 1.3, 0.4, 1),
     opacity 0.2s;
   pointer-events: none;
 }
@@ -289,34 +368,42 @@ p {
   z-index: 50;
   display: grid;
   place-items: center;
-  padding: 1rem;
-  background: rgba(5, 0, 15, 0.75);
-  backdrop-filter: blur(6px);
+  padding: max(16px, var(--safe-top)) 16px max(16px, var(--safe-bottom));
+  background: rgba(4, 6, 12, 0.78);
+  backdrop-filter: blur(8px);
+  animation: fade-in 0.2s ease;
 }
 
 .modal-card {
-  width: min(360px, 100%);
+  width: min(380px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 1rem;
-  padding: 1.5rem;
-  border-radius: var(--radius);
+  padding: 1.4rem;
+  border-radius: var(--radius-lg);
   background: var(--bg-2);
   border: 1px solid var(--border);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+
+.modal-card h2 {
+  font-size: 1.35rem;
 }
 
 .modal-card .btn {
   width: 100%;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-  }
+.modal-wide {
+  width: min(560px, 100%);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
 }
 
 .wheel-debug {
@@ -328,6 +415,15 @@ p {
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.6);
   font: 12px/1.6 ui-monospace, monospace;
-  color: var(--green);
+  color: var(--ok);
   pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

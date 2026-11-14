@@ -82,7 +82,8 @@ export function renderLanding(root, { roomFromUrl = '' } = {}) {
   nameInput.addEventListener('keydown', (e) => e.key === 'Enter' && roomFromUrl && join());
   codeInput.addEventListener('keydown', (e) => e.key === 'Enter' && join());
 
-  const logo = h('h1', { class: 'logo' }, h('span', { class: 'logo-wheel' }, '🎡'), h('span', {}, APP_NAME));
+  const [first, ...rest] = APP_NAME.split(' ');
+  const logo = h('h1', { class: 'logo', 'aria-label': APP_NAME }, h('span', { class: 'logo-top' }, first), h('span', { class: 'logo-bottom' }, rest.join(' ')));
   const installEl = h('div', { class: 'install' });
   const updateEl = h('div', { class: 'update-banner' });
 
@@ -114,19 +115,22 @@ export function renderLanding(root, { roomFromUrl = '' } = {}) {
         h(
           'section',
           { class: 'card card-join' },
-          h('h2', {}, '🎮 Entra in una stanza'),
+          h('div', { class: 'eyebrow' }, 'Hai un codice?'),
+          h('h2', {}, 'Entra in una stanza'),
           h('div', { class: 'row' }, codeInput, h('button', { class: 'btn btn-primary', onclick: join }, 'ENTRA')),
         ),
         h(
           'button',
           { class: 'card card-action', onclick: startPocket },
-          h('h2', {}, '📱 Crea stanza Pocket'),
+          h('div', { class: 'eyebrow' }, 'Solo telefoni'),
+          h('h2', {}, 'Crea stanza Pocket'),
           h('p', {}, 'Niente TV: ognuno vede la ruota sul proprio telefono. Il tuo fa da host.'),
         ),
         h(
           'button',
           { class: 'card card-action', onclick: startSalotto },
-          h('h2', {}, '📺 Schermo Salotto'),
+          h('div', { class: 'eyebrow' }, 'TV o PC'),
+          h('h2', {}, 'Schermo Salotto'),
           h('p', {}, 'Questo dispositivo è il tabellone (TV, PC, tablet). I telefoni sono i controller.'),
         ),
       ),
@@ -141,7 +145,7 @@ export function renderLanding(root, { roomFromUrl = '' } = {}) {
     clear(installEl);
     if (isStandalone()) return;
     if (canPromptInstall()) {
-      installEl.append(h('button', { class: 'btn btn-ghost', onclick: () => promptInstall().then(renderInstall) }, '⬇️ Installa l\'app'));
+      installEl.append(h('button', { class: 'btn btn-ghost', onclick: () => promptInstall().then(renderInstall) }, "Installa l'app"));
     } else if (isIOS()) {
       installEl.append(h('p', { class: 'muted small' }, 'Per giocare a schermo intero: Condividi ', h('b', {}, '⎋'), ' → ', h('b', {}, 'Aggiungi alla schermata Home')));
     }

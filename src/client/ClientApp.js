@@ -7,6 +7,9 @@ import { getClientId, save } from '../shared/util/storage.js';
 import { sfx } from '../shared/audio/sfx.js';
 import { segmentInfo } from '../shared/wheel/segments.js';
 import { createSpinPad } from './ui/SpinPad.js';
+import { openBeerPicker } from './ui/BeerPicker.js';
+import { getBeer } from '../shared/avatars/beers.js';
+import { beerIcon } from '../shared/ui/beerIcon.js';
 import { ClientPeer, RoomNotFoundError } from './net/ClientPeer.js';
 
 const WELCOME_TIMEOUT_MS = 8000;
@@ -38,9 +41,10 @@ export class ClientApp {
   #retryTimer = null;
   #lastHostMessage = 0;
   #viewKey = null;
-  #wheelSync = null;
+  #stageSync = null;
   #wheelLoading = false;
   #spinPad = null;
+  #pendingPicker = false;
 
   constructor(root, { roomCode, name, connect, canReconnect = true, isOwner = false }) {
     this.root = root;
@@ -135,7 +139,7 @@ export class ClientApp {
         this.#onState(msg.s);
         break;
       case MSG.SPIN_START:
-        this.#wheelSync?.playSpin(msg.plan, msg.elapsed);
+        this.#stageSync?.playSpin(msg.plan, msg.elapsed);
         if (this.mode === MODE.POCKET) sfx.spinStart();
         vibrate(30);
         break;
@@ -167,6 +171,8 @@ export class ClientApp {
     if (firstTime) {
       this.#renderPlay();
       sfx.join();
+      // Primo ingresso: l'host ci ha servito una birra a caso, proponiamo di cambiarla
+      if (!msg.rejoined) this.#pendingPicker = true;
     }
     this.#showReconnecting(false);
   }
@@ -175,10 +181,14 @@ export class ClientApp {
     const prev = this.snapshot;
     this.snapshot = s;
     if (!this.playerId) return;
-    this.#wheelSync?.applyState(s);
+    this.#stageSync?.applyState(s);
     this.#updateHeader();
     this.#updatePlayers();
     this.#updatePanel();
+    if (this.#pendingPicker) {
+      this.#pendingPicker = false;
+      this.#openPicker(true);
+    }
 
     const myTurnNow = s.phase === PHASE.IDLE && s.turnPlayerId === this.playerId;
     const myTurnBefore = prev && prev.phase === PHASE.IDLE && prev.turnPlayerId === this.playerId;
@@ -202,7 +212,7 @@ export class ClientApp {
       h(
         'div',
         { class: 'screen-center' },
-        h('div', { class: 'big-emoji' }, '😵'),
+        h('div', { class: 'eyebrow' }, 'Ops'),
         h('p', {}, text),
         canGoHome && h('button', { class: 'btn btn-primary', onclick: () => (location.href = './') }, 'Torna alla home'),
       ),
@@ -228,14 +238,24 @@ export class ClientApp {
   async #loadWheel() {
     if (this.#wheelLoading) return;
     this.#wheelLoading = true;
-    const [{ WheelRenderer }, { WheelSync }] = await Promise.all([
-      import('../shared/wheel/WheelRenderer.js'),
-      import('../shared/wheel/WheelSync.js'),
+    const [{ StageRenderer }, { StageSync }] = await Promise.all([
+      import('../shared/stage/StageRenderer.js'),
+      import('../shared/stage/StageSync.js'),
     ]);
-    const renderer = new WheelRenderer(this.wheelEl, { quality: 'low' });
-    renderer.on('tick', () => sfx.tick());
-    this.#wheelSync = new WheelSync(renderer);
-    if (this.snapshot) this.#wheelSync.applyState(this.snapshot);
+    const stage = new StageRenderer(this.wheelEl, { quality: 'low' });
+    stage.on('tick', () => sfx.tick());
+    this.#stageSync = new StageSync(stage);
+    if (this.snapshot) this.#stageSync.applyState(this.snapshot);
+  }
+
+  #openPicker(firstTime = false) {
+    if (!this.snapshot || document.querySelector('.modal')) return;
+    openBeerPicker({
+      players: this.snapshot.players,
+      myId: this.playerId,
+      firstTime,
+      onPick: (beerId) => this.#send({ t: MSG.AVATAR_PICK, beerId }),
+    });
   }
 
   #me() {
@@ -247,10 +267,15 @@ export class ClientApp {
     if (!me) return;
     this.root.style.setProperty('--me', me.color);
     clear(this.headerEl).append(
-      h('div', { class: 'me' }, h('span', { class: 'player-dot', style: { '--pc': me.color } }), h('span', { class: 'me-name' }, me.name)),
-      h('div', { class: 'coins' }, `🪙 ${me.coins}`),
+      h(
+        'button',
+        { class: 'me', type: 'button', title: 'Cambia birra', onclick: () => this.#openPicker() },
+        beerIcon(me.beer, 'sm'),
+        h('span', { class: 'me-text' }, h('span', { class: 'me-name' }, me.name), h('span', { class: 'me-beer' }, `${getBeer(me.beer).name} ▾`)),
+      ),
+      h('div', { class: 'coins' }, `${me.coins}`, h('span', { class: 'coin' })),
       this.isOwner
-        ? h('button', { class: 'btn btn-small', onclick: () => this.#showInvite() }, `➕ ${this.roomCode}`)
+        ? h('button', { class: 'btn btn-small', onclick: () => this.#showInvite() }, `+ ${this.roomCode}`)
         : h('div', { class: 'room-badge' }, this.roomCode),
     );
   }
@@ -262,7 +287,7 @@ export class ClientApp {
         h(
           'div',
           { class: `chip ${p.connected ? '' : 'offline'} ${p.id === s.turnPlayerId ? 'turn' : ''}`, style: { '--pc': p.color } },
-          h('span', { class: 'player-dot' }),
+          beerIcon(p.beer, 'xs'),
           `${p.name} · ${p.coins}`,
         ),
       ),
@@ -279,13 +304,14 @@ export class ClientApp {
     this.#spinPad = null;
 
     const turnPlayer = s.players.find((p) => p.id === s.turnPlayerId);
-    const lookAt = this.mode === MODE.SALOTTO ? 'Guarda lo schermo! 📺' : 'Guarda la ruota!';
+    const lookAt = this.mode === MODE.SALOTTO ? 'Guarda lo schermo' : 'Guarda la ruota';
     let content;
 
     if (s.phase === PHASE.IDLE && myTurn) {
       this.#spinPad = createSpinPad({
-        onSpin: (power) => {
-          this.#send({ t: MSG.SPIN_REQUEST, power });
+        onSpin: (force) => {
+          // Il payload è solo la forza del lancio: fisica ed esito li calcola l'host
+          this.#send({ t: MSG.SPIN_REQUEST, force });
           // Se l'host ignora la richiesta (turno cambiato nel frattempo) il pad torna attivo
           setTimeout(() => {
             if (this.#viewKey === key) {
@@ -295,17 +321,18 @@ export class ClientApp {
           }, 3000);
         },
       });
-      content = [h('h2', { class: 'panel-title glow' }, 'È il tuo turno!'), this.#spinPad];
+      content = [h('div', { class: 'eyebrow' }, 'Tocca a te'), this.#spinPad];
     } else if (s.phase === PHASE.IDLE) {
       content = [
-        h('div', { class: 'big-emoji' }, '⏳'),
-        h('h2', { class: 'panel-title' }, turnPlayer ? h('span', {}, 'Tocca a ', h('b', { style: { color: turnPlayer.color } }, turnPlayer.name)) : 'In attesa di giocatori...'),
+        turnPlayer ? beerIcon(turnPlayer.beer, 'xl') : null,
+        h('div', { class: 'eyebrow' }, 'Turno di'),
+        h('h2', { class: 'panel-title' }, turnPlayer ? h('span', { style: { color: turnPlayer.color } }, turnPlayer.name) : 'In attesa di giocatori'),
         h('p', { class: 'muted' }, 'Preparati, il prossimo potresti essere tu.'),
       ];
     } else if (s.phase === PHASE.SPINNING) {
       content = [
-        h('div', { class: 'big-emoji spin-anim' }, '🌀'),
-        h('h2', { class: 'panel-title' }, myTurn ? 'Hai lanciato!' : 'La ruota gira...'),
+        h('div', { class: 'spinner-ring' }),
+        h('h2', { class: 'panel-title' }, myTurn ? 'Hai lanciato' : 'La ruota gira'),
         h('p', { class: 'muted' }, lookAt),
       ];
     } else if (s.phase === PHASE.RESULT && s.lastResult) {
@@ -314,11 +341,11 @@ export class ClientApp {
       content = [
         h(
           'div',
-          { class: 'result-card', style: { '--sc': info.color } },
-          h('div', { class: 'result-emoji' }, info.emoji),
+          { class: 'result-card', style: { '--sc': info.glow } },
+          h('div', { class: 'eyebrow' }, 'La ruota ha deciso'),
           h('div', { class: 'result-label' }, info.label),
           h('div', { class: 'result-text' }, s.lastResult.text),
-          mine && s.lastResult.coinsDelta ? h('div', { class: 'result-coins' }, `+${s.lastResult.coinsDelta} 🪙`) : null,
+          mine && s.lastResult.coinsDelta ? h('div', { class: 'result-coins' }, `+${s.lastResult.coinsDelta}`, h('span', { class: 'coin coin-lg' })) : null,
         ),
       ];
     } else {
@@ -336,7 +363,7 @@ export class ClientApp {
     const url = joinUrl(this.roomCode);
     const { default: QRCode } = await import('qrcode');
     const canvas = h('canvas', { class: 'qr' });
-    QRCode.toCanvas(canvas, url, { margin: 1, width: 220, color: { dark: '#0b0420', light: '#ffffff' } });
+    QRCode.toCanvas(canvas, url, { margin: 1, width: 220, color: { dark: '#0a0e17', light: '#f4ead5' } });
     const close = () => modal.remove();
     const modal = h(
       'div',

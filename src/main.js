@@ -1,3 +1,6 @@
+import '@fontsource/oswald/latin-500.css';
+import '@fontsource/oswald/latin-600.css';
+import '@fontsource/oswald/latin-700.css';
 import './styles/base.css';
 import { normalizeRoomCode, ROOM_CODE_LENGTH } from './shared/config.js';
 import { preventZoomGestures } from './shared/util/device.js';

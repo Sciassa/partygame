@@ -1,60 +1,55 @@
-import { TAU, mod, pointerLocalAngle } from '../../shared/wheel/kinematics.js';
-import { randomFloat, randomInt } from '../../shared/util/random.js';
+import { FRICTION, TAU, createSpinPlan, pointerLocalAngle, segmentIndexAt } from '../../shared/wheel/kinematics.js';
+import { randomFloat } from '../../shared/util/random.js';
 
 /**
- * "Fisica" autoritativa della ruota, solo lato host.
+ * Motore fisico autoritativo della ruota (solo host).
  *
- * L'esito è deciso PRIMA dell'animazione con un random crittografico (equo e non manipolabile
- * da un client), poi si calcola un piano di spin che atterra esattamente su quello spicchio.
- * La forza dello swipe non cambia le probabilità: cambia giri, durata e spettacolo.
- *
- * In futuro: i pesi per spicchio (adesivi "calamita", ecc.) entreranno in pickTargetIndex().
+ * 1. LANCIO: la forza del giocatore (0..1) diventa una velocità angolare iniziale ω0.
+ * 2. Si aggiunge una variazione casuale (crittografica) di ±JITTER su ω0. La forza conta davvero
+ *    (più forte = più giri e più tempo), ma ±12% di ω0 sposta l'arrivo di più di un giro intero:
+ *    nessuno può "mirare" uno spicchio dosando lo swipe, e l'esito resta equo.
+ * 3. ATTRITO: il moto è calcolato in forma chiusa (vedi shared/wheel/kinematics.js), quindi la
+ *    ruota si ferma nello stesso punto su host e client.
+ * 4. RISOLUZIONE: lo spicchio vincente si ricava dall'angolo finale con aritmetica modulo 2π.
  */
-export const SPIN_LIMITS = Object.freeze({
-  minTurns: 3,
-  maxTurns: 8,
-  minDurationMs: 5000,
-  maxDurationMs: 8500,
+export const LAUNCH = Object.freeze({
+  minOmega: 9, // rad/s con forza 0   (~1.4 giri/s → circa 2 giri totali, ~4 s)
+  maxOmega: 28, // rad/s con forza 1   (~4.5 giri/s → circa 10 giri totali, ~7 s)
+  jitter: 0.12, // ±12% casuale su ω0
 });
 
-export function clampPower(power) {
-  const p = Number(power);
-  return Number.isFinite(p) ? Math.min(Math.max(p, 0), 1) : 0.5;
-}
-
-export function pickTargetIndex(segmentCount, weights = null) {
-  if (!weights) return randomInt(0, segmentCount - 1);
-  const total = weights.reduce((a, b) => a + b, 0);
-  let r = randomFloat() * total;
-  for (let i = 0; i < weights.length; i++) {
-    r -= weights[i];
-    if (r < 0) return i;
-  }
-  return weights.length - 1;
+export function clampForce(force) {
+  const f = Number(force);
+  return Number.isFinite(f) ? Math.min(Math.max(f, 0), 1) : 0.5;
 }
 
 /**
- * @param {number} fromAngle  angolo attuale della ruota
- * @param {number} power      0..1 (dallo swipe o dal tasto)
- * @param {number} segmentCount
- * @returns {{ from:number, to:number, duration:number, targetIndex:number }}
+ * Pianifica uno spin a partire dalla forza del lancio.
+ * @param {number} fromAngle angolo attuale della ruota (rad)
+ * @param {number} force     0..1, dallo swipe o dal tasto del telefono
  */
-export function planSpin(fromAngle, power, segmentCount, weights = null) {
-  const p = clampPower(power);
-  const s = TAU / segmentCount;
-  const targetIndex = pickTargetIndex(segmentCount, weights);
+export function planSpin(fromAngle, force, friction = FRICTION) {
+  const f = clampForce(force);
+  // curva leggermente "ease-in": i lanci deboli restano controllabili, quelli forti esplodono
+  const base = LAUNCH.minOmega + (LAUNCH.maxOmega - LAUNCH.minOmega) * f ** 1.2;
+  const omega0 = base * (1 + (randomFloat() * 2 - 1) * LAUNCH.jitter);
+  return { ...createSpinPlan(fromAngle, omega0, friction), force: f };
+}
 
-  // Atterra dentro lo spicchio, lontano dai bordi (niente "era sul confine!" ambigui)
-  const inside = 0.15 + randomFloat() * 0.7;
-  const targetLocal = (targetIndex + inside) * s;
-  const turns = Math.round(SPIN_LIMITS.minTurns + p * (SPIN_LIMITS.maxTurns - SPIN_LIMITS.minTurns));
-  const delta = mod(targetLocal - pointerLocalAngle(fromAngle), TAU) + turns * TAU;
-
-  const duration = Math.round(
-    SPIN_LIMITS.minDurationMs + p * (SPIN_LIMITS.maxDurationMs - SPIN_LIMITS.minDurationMs) + randomFloat() * 600,
-  );
-
-  // Rotazione oraria = angolo decrescente. Normalizziamo `to` per non far crescere i numeri all'infinito.
-  const from = mod(fromAngle, TAU);
-  return { from, to: from - delta, duration, targetIndex };
+/**
+ * Su quale spicchio si è fermato il puntatore?
+ * Il puntatore è fisso in alto; la ruota ha ruotato di `finalAngle`. Riportiamo il puntatore nello
+ * spazio locale della ruota (-angolo, modulo 2π) e dividiamo per l'ampiezza di uno spicchio.
+ */
+export function resolveStop(finalAngle, segmentCount) {
+  const segmentAngle = TAU / segmentCount;
+  const local = pointerLocalAngle(finalAngle); // 0..2π
+  const index = segmentIndexAt(finalAngle, segmentCount);
+  const offset = (local - index * segmentAngle) / segmentAngle; // 0..1: posizione dentro lo spicchio
+  return {
+    index,
+    pointerLocalDeg: (local * 180) / Math.PI,
+    offsetInSegment: offset,
+    nearEdge: offset < 0.04 || offset > 0.96, // "sul filo"
+  };
 }

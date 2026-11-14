@@ -1,34 +1,50 @@
 import { h } from '../../shared/util/dom.js';
 import { vibrate } from '../../shared/util/device.js';
 
-const MIN_SWIPE_PX = 50;
-const MIN_POWER = 0.15;
+const MIN_SWIPE_PX = 40;
+const MIN_FORCE = 0.12;
 const CHARGE_PERIOD_MS = 1100; // tempo per andare da 0 a 1 tenendo premuto
 
 /**
- * Controller per girare la ruota, due modi:
- *  1. SWIPE: trascina e lancia; la velocità del gesto = potenza
- *  2. TIENI PREMUTO il bottone: la barra oscilla 0→1→0, rilascia al momento giusto
- * onSpin(power: 0..1) viene chiamato una sola volta, poi il pad si disattiva.
+ * Controller per lanciare la ruota. Due modi, stessa uscita: onSpin(force 0..1), una sola volta.
+ *  1. SWIPE sull'area grande: conta la velocità del "colpo" finale, non la lunghezza del gesto
+ *  2. TIENI PREMUTO il tasto: la barra oscilla 0→1→0, rilasci quando ti piace
+ * Dopo il lancio mostra la forza usata e si disattiva.
  */
 export function createSpinPad({ onSpin }) {
   let fired = false;
-  const fire = (power) => {
+  const forceValue = h('div', { class: 'force-value' }, '');
+  const forceBar = h('div', { class: 'force-bar' }, h('div', { class: 'force-bar-fill' }));
+
+  const showForce = (force) => {
+    const pct = Math.round(force * 100);
+    forceValue.textContent = `${pct}%`;
+    forceBar.style.setProperty('--force', force);
+  };
+
+  const fire = (raw) => {
     if (fired) return;
     fired = true;
+    const force = Math.min(1, Math.max(MIN_FORCE, raw));
+    showForce(force);
     root.classList.add('fired');
-    vibrate(40);
-    onSpin(Math.min(1, Math.max(MIN_POWER, power)));
+    vibrate(force > 0.8 ? [30, 30, 60] : 40);
+    onSpin(force);
   };
 
   // ---------------------------------------------------- swipe
-  const arrow = h('div', { class: 'swipe-arrow' }, '⟳');
-  const zone = h('div', { class: 'swipe-zone', role: 'button', 'aria-label': 'Swipa per girare la ruota' },
-    arrow,
-    h('div', { class: 'swipe-label' }, 'SWIPA PER GIRARE'),
+  const dial = h('div', { class: 'swipe-dial', 'aria-hidden': 'true' }, h('div', { class: 'swipe-dial-mark' }));
+  const zone = h(
+    'div',
+    { class: 'swipe-zone', role: 'button', 'aria-label': 'Swipa per lanciare la ruota' },
+    dial,
+    h('div', { class: 'swipe-label' }, 'Swipa per lanciare'),
+    h('div', { class: 'swipe-hint' }, 'più veloce = più forte'),
+    forceValue,
   );
   let samples = [];
   let pointerId = null;
+  let dialAngle = 0;
 
   zone.addEventListener('pointerdown', (e) => {
     if (fired) return;
@@ -39,36 +55,36 @@ export function createSpinPad({ onSpin }) {
   });
   zone.addEventListener('pointermove', (e) => {
     if (e.pointerId !== pointerId) return;
+    const prev = samples[samples.length - 1];
     samples.push({ x: e.clientX, y: e.clientY, t: e.timeStamp });
-    if (samples.length > 30) samples.shift();
-    const first = samples[0];
-    arrow.style.transform = `translate(${(e.clientX - first.x) * 0.4}px, ${(e.clientY - first.y) * 0.4}px) rotate(${(e.clientX - first.x) * 0.8}deg)`;
+    if (samples.length > 40) samples.shift();
+    // la manopola segue il dito: feedback immediato, sensazione di "afferrare" la ruota
+    dialAngle += (e.clientX - prev.x - (e.clientY - prev.y)) * 0.6;
+    dial.style.transform = `rotate(${dialAngle}deg)`;
+    showForce(Math.min(1, swipeForce(samples)));
   });
   const endSwipe = (e, cancelled) => {
     if (e.pointerId !== pointerId) return;
     pointerId = null;
     zone.classList.remove('active');
-    arrow.style.transform = '';
-    if (cancelled || samples.length < 2) return;
-    const last = samples[samples.length - 1];
+    if (cancelled || samples.length < 2) return resetPreview();
     const first = samples[0];
-    if (Math.hypot(last.x - first.x, last.y - first.y) < MIN_SWIPE_PX) return;
-    // velocità sugli ultimi ~100ms: conta il "colpo" finale, non tutto il trascinamento
-    const recent = samples.filter((s) => last.t - s.t <= 100);
-    const start = recent[0] === last ? samples[samples.length - 2] : recent[0];
-    const dt = Math.max(1, last.t - start.t);
-    const speed = Math.hypot(last.x - start.x, last.y - start.y) / dt; // px/ms
-    const diag = Math.hypot(window.innerWidth, window.innerHeight);
-    fire(speed / (diag * 0.004));
+    const last = samples[samples.length - 1];
+    if (Math.hypot(last.x - first.x, last.y - first.y) < MIN_SWIPE_PX) return resetPreview();
+    fire(swipeForce(samples));
+  };
+  const resetPreview = () => {
+    forceValue.textContent = '';
+    forceBar.style.setProperty('--force', 0);
   };
   zone.addEventListener('pointerup', (e) => endSwipe(e, false));
   zone.addEventListener('pointercancel', (e) => endSwipe(e, true));
 
   // ---------------------------------------------------- tieni premuto
-  const meterFill = h('div', { class: 'power-fill' });
-  const button = h('button', { class: 'btn btn-spin', type: 'button' },
-    h('span', { class: 'btn-spin-label' }, 'TIENI PREMUTO'),
-    h('div', { class: 'power-meter' }, meterFill),
+  const button = h(
+    'button',
+    { class: 'btn btn-spin', type: 'button' },
+    h('span', { class: 'btn-spin-label' }, 'Tieni premuto · rilascia'),
   );
   let chargeStart = 0;
   let raf = 0;
@@ -77,7 +93,7 @@ export function createSpinPad({ onSpin }) {
     return x <= 1 ? x : 2 - x; // ping-pong
   };
   const loop = (now) => {
-    meterFill.style.transform = `scaleX(${chargeValue(now)})`;
+    showForce(chargeValue(now));
     raf = requestAnimationFrame(loop);
   };
   button.addEventListener('pointerdown', (e) => {
@@ -92,14 +108,28 @@ export function createSpinPad({ onSpin }) {
     if (!button.classList.contains('charging')) return;
     cancelAnimationFrame(raf);
     button.classList.remove('charging');
-    if (!cancelled) fire(chargeValue(performance.now()));
-    meterFill.style.transform = 'scaleX(0)';
+    if (cancelled) return resetPreview();
+    fire(chargeValue(performance.now()));
   };
   button.addEventListener('pointerup', () => release(false));
   button.addEventListener('pointercancel', () => release(true));
   button.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  const root = h('div', { class: 'spin-pad' }, zone, button);
+  const root = h('div', { class: 'spin-pad' }, zone, forceBar, button);
   root.destroy = () => cancelAnimationFrame(raf);
   return root;
+}
+
+/**
+ * Forza dello swipe: velocità (px/ms) sugli ultimi ~90 ms, normalizzata sulla diagonale dello
+ * schermo così un telefono piccolo e un tablet richiedono lo stesso "colpo".
+ */
+function swipeForce(samples) {
+  const last = samples[samples.length - 1];
+  const recent = samples.filter((s) => last.t - s.t <= 90);
+  const start = recent[0] === last ? samples[Math.max(0, samples.length - 2)] : recent[0];
+  const dt = Math.max(8, last.t - start.t);
+  const speed = Math.hypot(last.x - start.x, last.y - start.y) / dt;
+  const diag = Math.hypot(window.innerWidth, window.innerHeight);
+  return speed / (diag * 0.0035);
 }
