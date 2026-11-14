@@ -165,9 +165,8 @@
 
 .host-banner {
   position: absolute;
-  left: 50%;
-  bottom: 3.5vh;
-  transform: translateX(-50%);
+  left: 1.5rem;
+  top: 1.5rem;
   max-width: 90%;
   padding: 0.65rem 1.6rem;
   border-radius: 999px;

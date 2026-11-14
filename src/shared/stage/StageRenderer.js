@@ -41,7 +41,7 @@ export class StageRenderer extends Emitter {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     // Tone mapping "cinematografico": alte luci morbide, neri profondi
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.toneMappingExposure = 1.0;
     // Ombre morbide: in three r187 PCFSoftShadowMap è stato rimosso (ripiega su PCF con un avviso);
     // PCFShadowMap + shadow.radius (campionamento a disco di Vogel) dà la penombra larga.
     this.renderer.shadowMap.enabled = quality === 'high';
@@ -163,12 +163,14 @@ export class StageRenderer extends Emitter {
     // Inquadratura: dal puntatore in cima alla ruota fino al bordo del bancone, in ogni aspect ratio.
     const aspect = width / height;
     const tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
-    const halfH = WHEEL_RADIUS + 1.55;
+    // dal lampione del puntatore (y≈3.6) al bancone col piedistallo (y≈-4.4)
+    // (le birre sedute sul bancone stanno più vicine alla camera: serve margine in basso)
+    const halfH = WHEEL_RADIUS + 2.0;
     const halfW = WHEEL_RADIUS + 0.85;
     const distance = Math.max(halfH / tan, halfW / (tan * aspect));
     this.camera.aspect = aspect;
-    this.camera.position.set(0, 1.1, distance);
-    this.camera.lookAt(0, -0.45, 0);
+    this.camera.position.set(0, 0.5, distance);
+    this.camera.lookAt(0, -0.85, 0);
     this.camera.updateProjectionMatrix();
 
     // Quante birre stanno in una fila: larghezza visibile alla profondità della prima fila
@@ -184,7 +186,7 @@ export class StageRenderer extends Emitter {
     this.#updateSpin();
     this.wheel.update(t, dt);
     this.avatars.update(t, dt);
-    this.pub.glow.material.opacity = 0.85 + 0.15 * Math.sin(t * 0.9);
+    this.pub.update(t);
 
     if (this.composer) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
@@ -200,6 +202,7 @@ export class StageRenderer extends Emitter {
     const crossedPeg = this.wheel.setAngle(angleAt(plan, elapsed));
     if (crossedPeg) {
       this.wheel.kickPointer(angularVelocityAt(plan, elapsed));
+      this.avatars.tick(this.timer.getElapsed());
       this.emit('tick', this.wheel.lastIndex);
     }
 

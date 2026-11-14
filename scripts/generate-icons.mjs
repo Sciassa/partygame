@@ -11,8 +11,8 @@ import { resolve } from 'node:path';
 const OUT = resolve(import.meta.dirname, '../public/icons');
 mkdirSync(OUT, { recursive: true });
 
-const BG = [10, 14, 23]; // blu notte
-const SEGMENTS = [[31, 127, 134], [158, 39, 66], [201, 138, 30]]; // trivia, minigioco, fortuna
+const BG = [8, 9, 13]; // quasi nero caldo
+const SEGMENTS = [[21, 42, 51], [44, 24, 35], [46, 36, 20]]; // spicchi blu notte tinti (come la ruota)
 const N = 12;
 const TAU = Math.PI * 2;
 
@@ -45,24 +45,24 @@ function shade(x, y, { rounded, scale }) {
     color = [base[0] * k, base[1] * k, base[2] * k, 1];
     // separatori
     const edge = Math.min(local, 1 - local) * (TAU / N) * d;
-    if (edge < 0.012 && d > 0.17) color = [212, 162, 76, 1]; // separatori ottone
+    if (edge < 0.014 && d > 0.17) color = [217, 169, 79, 1]; // separatori oro
     // hub
-    if (d < 0.17) color = d < 0.11 ? [200, 29, 67, 1] : [201, 154, 75, 1];
+    if (d < 0.17) color = d < 0.11 ? [38, 48, 74, 1] : [255, 157, 58, 1]; // mozzo navy, anello ambra
   } else if (d <= R + 0.09) {
-    // cornice nera opaca con lampadine ambra
-    color = [20, 20, 26, 1];
+    // bordo spesso blu notte con borchie oro
+    color = [38, 48, 74, 1];
     const a = (Math.atan2(py, px) + TAU) % TAU;
     const bulb = a / (TAU / 24);
     const db = Math.abs(bulb - Math.round(bulb)) * (TAU / 24) * (R + 0.045);
     const dr = Math.abs(d - (R + 0.045));
-    if (Math.hypot(db, dr) < 0.028) color = [255, 190, 110, 1];
+    if (Math.hypot(db, dr) < 0.026 && Math.round(bulb) % 2 === 0) color = [217, 169, 79, 1];
   } else if (Math.abs(d - (R + 0.15)) < 0.018) {
-    color = [255, 61, 127, 1]; // anello neon
+    color = [255, 157, 58, 1]; // filo ambra
   }
 
   // puntatore (triangolo rosso in alto)
   const ty = (py - (R + 0.02)) / 0.24; // 0 = punta, 1 = base
-  if (ty >= 0 && ty <= 1 && Math.abs(px) <= ty * 0.13) color = [244, 234, 213, 1]; // puntatore crema
+  if (ty >= 0 && ty <= 1 && Math.abs(px) <= ty * 0.13) color = [255, 190, 110, 1]; // puntatore ambra
   return color;
 }
 
@@ -152,20 +152,20 @@ for (const [file, size, opts] of icons) {
 writeFileSync(
   resolve(OUT, '../favicon.svg'),
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -50 100 100">
-  <rect x="-50" y="-50" width="100" height="100" rx="22" fill="#0a0e17"/>
+  <rect x="-50" y="-50" width="100" height="100" rx="22" fill="#08090d"/>
   <g transform="translate(0 4)">
     ${Array.from({ length: N }, (_, i) => {
       const a0 = -Math.PI / 2 - (i * TAU) / N;
       const a1 = a0 - TAU / N;
       const p = (a) => `${(Math.cos(a) * 36).toFixed(2)} ${(Math.sin(a) * 36).toFixed(2)}`;
-      const c = ['#1f7f86', '#9e2742', '#c98a1e'][i % 3];
+      const c = ['#152a33', '#2c1823', '#2e2414'][i % 3];
       return `<path d="M0 0 L${p(a0)} A36 36 0 0 0 ${p(a1)} Z" fill="${c}"/>`;
     }).join('\n    ')}
-    <circle r="38" fill="none" stroke="#14141a" stroke-width="5"/>
-    <circle r="42" fill="none" stroke="#ff3d7f" stroke-width="1.5"/>
-    <circle r="7" fill="#c99a4b"/>
+    <circle r="38" fill="none" stroke="#26304a" stroke-width="6"/>
+    <circle r="35" fill="none" stroke="#d9a94f" stroke-width="1.6"/>
+    <circle r="7" fill="#26304a" stroke="#ff9d3a" stroke-width="1.5"/>
   </g>
-  <path d="M-7 -46 L7 -46 L0 -28 Z" fill="#f4ead5"/>
+  <path d="M-7 -46 L7 -46 L0 -28 Z" fill="#ff9d3a"/>
 </svg>
 `,
 );

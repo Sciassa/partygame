@@ -1,45 +1,49 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { getBeer } from './beers.js';
 import { vinylMaterial } from '../stage/vinyl.js';
 
 /**
- * Avatar 3D "designer toy": un bicchiere di birra colmo, costruito con primitive
- * (cilindri, sfere, torus), materiali vinile opachi e una faccina.
+ * Avatar 3D "designer toy" come nella reference: bicchiere di vetro smerigliato colmo di birra,
+ * schiuma cremosa che deborda appena, faccina minimale e braccine/gambette a tubo
+ * del colore della birra. Sta seduto sul bancone con le gambe in avanti.
  *
- * API minima (sostituibile in futuro con modelli GLB senza toccare il resto):
- *   new BeerAvatar(beerId | null) → .root, .body, .height, .setBeer(), .setDimmed(), .dispose()
+ * Rig per le animazioni (pilotato da AvatarLineup):
+ *  - body:            tutto il bicchiere (squash, inclinazioni)
+ *  - arms[0|1]:       perni delle spalle sinistra/destra (rotation.z = alza di lato, .x = in avanti)
+ *  - legs[0|1]:       perni delle anche (rotation.x negativa = calcia/alza il piede)
+ *  - eyes:            gruppo occhi (scale.y per sbattere le palpebre)
+ *
+ * Prestazioni: le parti fisse sono fuse per materiale (≈ 10 draw call per avatar invece di ~40).
  * beerId null = bicchiere vuoto (giocatore disconnesso: la sua birra è tornata nel pool).
- *
- * Unità: origine alla base del bicchiere (y = 0), alto ~1.2–1.5.
  */
 
 /**
  * Forme dei bicchieri.
- *  kind 'cup':  corpo cilindrico (raggio basso rb, alto rt, altezza h), eventuale piede/rigonfiamento
+ *  kind 'cup':  corpo a tronco di cono (rb raggio sotto, rt sopra, h altezza) + dettagli
  *  kind 'bowl': calice a coppa sferica su stelo
  */
 export const GLASS_SHAPES = {
-  shaker: { kind: 'cup', rb: 0.3, rt: 0.39, h: 1.05 },
-  nonic: { kind: 'cup', rb: 0.3, rt: 0.36, h: 1.05, bulge: 0.82 },
-  weizen: { kind: 'cup', rb: 0.21, rt: 0.34, h: 1.32 },
-  pilsner: { kind: 'cup', rb: 0.16, rt: 0.33, h: 1.18, foot: true },
-  stange: { kind: 'cup', rb: 0.24, rt: 0.26, h: 1.3 },
-  tumbler: { kind: 'cup', rb: 0.33, rt: 0.41, h: 0.88 },
-  mug: { kind: 'cup', rb: 0.4, rt: 0.4, h: 0.95, handle: true },
-  tulip: { kind: 'bowl', r: 0.38, stem: 0.32, mouth: 0.3, lip: 0.14 },
-  snifter: { kind: 'bowl', r: 0.44, stem: 0.26, mouth: 0.27, lip: 0.05 },
+  shaker: { kind: 'cup', rb: 0.3, rt: 0.37, h: 1.05 },
+  nonic: { kind: 'cup', rb: 0.29, rt: 0.35, h: 1.12, bulge: 0.8 },
+  weizen: { kind: 'cup', rb: 0.22, rt: 0.33, h: 1.3 },
+  pilsner: { kind: 'cup', rb: 0.17, rt: 0.32, h: 1.15, foot: true },
+  stange: { kind: 'cup', rb: 0.24, rt: 0.26, h: 1.22 },
+  tumbler: { kind: 'cup', rb: 0.34, rt: 0.4, h: 0.86 },
+  mug: { kind: 'cup', rb: 0.4, rt: 0.4, h: 0.95, handle: true, dimples: true },
+  tulip: { kind: 'bowl', r: 0.4, stem: 0.3, mouth: 0.34, lip: 0.12 },
+  snifter: { kind: 'bowl', r: 0.45, stem: 0.24, mouth: 0.3, lip: 0.04 },
 };
 
-const BASE_T = 0.1; // spessore del fondo di vetro
-const SEG = 40;
+const SEG = 36;
+const BASE_T = 0.1;
 
-function luminance(hex) {
-  const c = new THREE.Color(hex);
-  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+function luminance(color) {
+  return 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
 }
 
-/** Colori per vertice lungo Y: liquido più scuro e saturo sul fondo, più chiaro verso la schiuma. */
-function paintGradient(geometry, bottomColor, topColor) {
+/** Colori per vertice lungo Y: liquido più profondo sul fondo, più chiaro in alto. */
+function paintGradient(geometry, bottom, top) {
   geometry.computeBoundingBox();
   const { min, max } = geometry.boundingBox;
   const pos = geometry.attributes.position;
@@ -47,16 +51,18 @@ function paintGradient(geometry, bottomColor, topColor) {
   const c = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
     const k = (pos.getY(i) - min.y) / Math.max(1e-6, max.y - min.y);
-    c.copy(bottomColor).lerp(topColor, k ** 0.8);
-    c.toArray(colors, i * 3);
+    c.copy(bottom).lerp(top, k ** 0.9).toArray(colors, i * 3);
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   return geometry;
 }
 
 export class BeerAvatar {
-  root = new THREE.Group(); // posizionato/animato da AvatarLineup
-  body = new THREE.Group(); // contenuto (squash & stretch senza toccare root)
+  root = new THREE.Group();
+  body = new THREE.Group();
+  eyes = new THREE.Group();
+  arms = [];
+  legs = [];
   #materials = [];
   #geometries = [];
 
@@ -75,9 +81,15 @@ export class BeerAvatar {
     this.#clear();
     const beer = beerId ? getBeer(beerId) : null;
     const shape = GLASS_SHAPES[beer?.glass ?? 'shaker'];
-    const g = shape.kind === 'bowl' ? this.#buildBowl(shape, beer) : this.#buildCup(shape, beer);
-    this._height = g.foamTop;
+    const colors = this.#palette(beer);
+
+    const parts = new THREE.Group(); // parti fisse, fuse alla fine
+    const g = shape.kind === 'bowl' ? this.#buildBowl(parts, shape, beer, colors) : this.#buildCup(parts, shape, beer, colors);
+    this.#mergeInto(parts);
     this.#buildFace(g, beer);
+    this.#buildLimbs(g, colors);
+    this._height = g.top;
+
     this.body.traverse((o) => {
       if (o.isMesh) {
         o.castShadow = !o.material.transparent;
@@ -87,7 +99,6 @@ export class BeerAvatar {
     this.#applyDim();
   }
 
-  /** Giocatore disconnesso: tutto sbiadito (l'inclinazione la fa AvatarLineup). */
   setDimmed(dimmed) {
     if (this.dimmed === dimmed) return;
     this.dimmed = dimmed;
@@ -100,282 +111,275 @@ export class BeerAvatar {
 
   // ------------------------------------------------------------------ materiali
 
-  #glassMaterial() {
-    return this.#mat(
-      vinylMaterial({
-        color: 0xe9f1f8,
-        roughness: 0.32,
-        transparent: true,
-        opacity: 0.13,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        rimStrength: 1.6,
-        rimPower: 2.0,
-      }),
-    );
+  #palette(beer) {
+    const liquid = new THREE.Color(beer?.liquid ?? '#8a8f99');
+    const dark = luminance(liquid) < 0.06;
+    return {
+      liquid,
+      foam: new THREE.Color(beer?.foam ?? '#ffffff'),
+      // arti: come nella reference, del colore della birra; "gomma nera" per le scure
+      limb: dark ? new THREE.Color('#1c1d22') : liquid.clone().offsetHSL(0, 0.05, -0.04),
+      dark,
+    };
   }
 
-  #frostMaterial() {
-    // fondo spesso e bordo: vetro "smerigliato" più pieno
-    return this.#mat(vinylMaterial({ color: 0xdfe9f2, roughness: 0.45, transparent: true, opacity: 0.42, rimStrength: 1.2 }));
+  #materialsFor(colors) {
+    if (this._mats) return this._mats;
+    this._mats = {
+      // vetro smerigliato: traslucido, ruvido, bordo acceso dalla luce di taglio
+      glass: this.#mat(
+        vinylMaterial({ color: 0xe4ebf2, roughness: 0.5, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide, rimStrength: 1.1, rimPower: 2.2 }),
+      ),
+      frost: this.#mat(vinylMaterial({ color: 0xdfe6ee, roughness: 0.6, transparent: true, opacity: 0.38, rimStrength: 0.9 })),
+      // pochi riflessi d'ambiente sul liquido: le birre scure restano scure (non grigie)
+      liquid: this.#mat(vinylMaterial({ vertexColors: true, roughness: 0.55, emissive: colors.liquid, emissiveIntensity: 0.1, envMapIntensity: 0.3, rimStrength: 0.6 })),
+      foam: this.#mat(vinylMaterial({ color: colors.foam.clone().multiplyScalar(0.88), roughness: 0.93, envMapIntensity: 0.5, rimStrength: 0.7, rimPower: 2.4 })),
+    };
+    return this._mats;
   }
 
-  #liquidMaterial(beer) {
-    return this.#mat(
-      vinylMaterial({
-        vertexColors: true,
-        roughness: 0.62,
-        emissive: beer.liquid,
-        emissiveIntensity: 0.2,
-        rimStrength: 0.7,
-      }),
-    );
-  }
-
-  #foamMaterial(beer) {
-    return this.#mat(vinylMaterial({ color: beer.foam, roughness: 0.92, rimStrength: 0.9, rimPower: 2.2 }));
-  }
-
-  #liquidGeometry(geometry, beer) {
-    const base = new THREE.Color(beer.liquid);
-    const deep = base.clone().multiplyScalar(0.55);
-    const light = base.clone().lerp(new THREE.Color(0xffffff), 0.18);
+  #liquidGeometry(geometry, colors) {
+    const deep = colors.liquid.clone().multiplyScalar(colors.dark ? 0.6 : 0.62);
+    const light = colors.liquid.clone().lerp(new THREE.Color(0xffffff), colors.dark ? 0.06 : 0.16);
     return paintGradient(geometry, deep, light);
   }
 
   // ------------------------------------------------------------------ bicchieri
 
-  /** Pinta, nonic, weizen, pilsner, stange, tumbler, boccale. */
-  #buildCup(shape, beer) {
+  #buildCup(parts, shape, beer, colors) {
     const { rb, rt, h } = shape;
-    const glassMat = this.#glassMaterial();
-    const frostMat = this.#frostMaterial();
+    const mats = this.#materialsFor(colors);
+    const add = (geo, mat, x = 0, y = 0, z = 0, rx = 0, rz = 0) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.rotation.set(rx, 0, rz);
+      parts.add(m);
+      return m;
+    };
     let y0 = 0;
-
     if (shape.foot) {
-      const foot = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(0.27, 0.29, 0.07, SEG)), frostMat);
-      foot.position.y = 0.035;
-      this.body.add(foot);
+      add(new THREE.CylinderGeometry(0.26, 0.28, 0.07, SEG), mats.frost, 0, 0.035);
       y0 = 0.07;
     }
-
-    const bottom = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(rb * 1.02, rb * 1.05, BASE_T, SEG)), frostMat);
-    bottom.position.y = y0 + BASE_T / 2;
-    this.body.add(bottom);
-
-    const wall = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(rt, rb, h, SEG, 1, true)), glassMat);
-    wall.position.y = y0 + h / 2;
-    wall.renderOrder = 2;
-    this.body.add(wall);
-
+    add(new THREE.CylinderGeometry(rb * 1.03, rb * 1.06, BASE_T, SEG), mats.frost, 0, y0 + BASE_T / 2);
+    add(new THREE.CylinderGeometry(rt, rb, h, SEG, 1, true), mats.glass, 0, y0 + h / 2);
     const rimY = y0 + h;
-    const rim = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(rt, 0.028, 10, SEG)), frostMat);
-    rim.rotation.x = Math.PI / 2;
-    rim.position.y = rimY;
-    this.body.add(rim);
-
+    add(new THREE.TorusGeometry(rt, 0.025, 8, SEG), mats.frost, 0, rimY, 0, Math.PI / 2);
     const radiusAt = (y) => rb + ((rt - rb) * (y - y0)) / h;
 
-    if (shape.bulge) {
-      // il "gradino" della nonic
-      const ring = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(radiusAt(y0 + h * shape.bulge) + 0.02, 0.035, 10, SEG)), frostMat);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.y = y0 + h * shape.bulge;
-      this.body.add(ring);
-    }
+    if (shape.bulge) add(new THREE.TorusGeometry(radiusAt(y0 + h * shape.bulge) + 0.015, 0.035, 8, SEG), mats.frost, 0, y0 + h * shape.bulge, 0, Math.PI / 2);
     if (shape.handle) {
-      const handle = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(0.26, 0.065, 12, 28, Math.PI * 1.15)), frostMat);
-      handle.rotation.z = -Math.PI / 2 - 0.23;
-      handle.position.set(rt + 0.02, y0 + h * 0.52, 0);
-      this.body.add(handle);
+      // manico spesso del boccale (a destra, come nella reference)
+      add(new THREE.TorusGeometry(0.27, 0.07, 12, 26, Math.PI * 1.1), mats.frost, rt + 0.03, y0 + h * 0.52, 0, 0, -Math.PI / 2 - 0.16);
+    }
+    if (shape.dimples) {
+      // bugne ovali del boccale
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+        const bump = add(new THREE.CapsuleGeometry(0.075, 0.32, 4, 10), mats.frost, Math.sin(a) * (rb + 0.005), y0 + h * 0.36, Math.cos(a) * (rb + 0.005));
+        bump.scale.set(1, 1, 0.35);
+        bump.rotation.y = a;
+      }
     }
 
-    // liquido: cilindro pieno leggermente più stretto del vetro
+    // liquido fino a sotto la fascia di schiuma, che si vede attraverso il vetro
+    const foamBand = h * 0.17;
     const liquidBottom = y0 + BASE_T;
-    const liquidTop = rimY - 0.04;
+    const liquidTop = rimY - foamBand;
     if (beer) {
       const lh = liquidTop - liquidBottom;
-      const liquidGeo = this.#liquidGeometry(
-        new THREE.CylinderGeometry(radiusAt(liquidTop) * 0.92, radiusAt(liquidBottom) * 0.92, lh, SEG),
-        beer,
-      );
-      const liquid = new THREE.Mesh(this.#geo(liquidGeo), this.#liquidMaterial(beer));
-      liquid.position.y = liquidBottom + lh / 2;
-      this.body.add(liquid);
-      this.#addBubbles(beer, radiusAt(liquidTop) * 0.8, liquidBottom + 0.15, liquidTop - 0.05);
+      add(this.#liquidGeometry(new THREE.CylinderGeometry(radiusAt(liquidTop) * 0.93, radiusAt(liquidBottom) * 0.93, lh, SEG), colors), mats.liquid, 0, liquidBottom + lh / 2);
+      this.#buildFoam(parts, mats.foam, radiusAt(liquidTop) * 0.93, liquidTop, rt, rimY);
     }
 
-    const foamTop = beer ? this.#buildFoam(beer, rt, rimY) : rimY;
-    return { kind: 'cup', faceY: y0 + h * 0.48, faceR: radiusAt(y0 + h * 0.48), foamTop, rimY, rt };
+    const faceY = y0 + h * (beer ? 0.5 : 0.45);
+    return {
+      top: rimY + (beer ? 0.2 : 0.02),
+      faceY,
+      faceR: radiusAt(faceY),
+      shoulderY: y0 + h * 0.4,
+      shoulderR: radiusAt(y0 + h * 0.4),
+      hipY: y0 + 0.12,
+      hipZ: rb * 0.78,
+      hipX: Math.min(0.14, rb * 0.5),
+    };
   }
 
-  /** Tulipano e ballon: piede + stelo + coppa sferica. */
-  #buildBowl(shape, beer) {
+  #buildBowl(parts, shape, beer, colors) {
     const { r, stem, mouth, lip } = shape;
-    const glassMat = this.#glassMaterial();
-    const frostMat = this.#frostMaterial();
+    const mats = this.#materialsFor(colors);
+    const add = (geo, mat, y = 0, rx = 0) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.y = y;
+      m.rotation.x = rx;
+      parts.add(m);
+      return m;
+    };
+    add(new THREE.CylinderGeometry(0.27, 0.3, 0.06, SEG), mats.frost, 0.03);
+    add(new THREE.CylinderGeometry(0.055, 0.08, stem, 14), mats.frost, 0.06 + stem / 2);
 
-    const foot = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(0.26, 0.29, 0.06, SEG)), frostMat);
-    foot.position.y = 0.03;
-    const stemMesh = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(0.055, 0.075, stem, 16)), frostMat);
-    stemMesh.position.y = 0.06 + stem / 2;
-    this.body.add(foot, stemMesh);
-
-    // coppa: sfera aperta in alto dove il raggio scende a `mouth`
-    const cy = 0.06 + stem + r * 0.92; // centro della sfera
-    const thetaMouth = Math.asin(Math.min(0.99, mouth / r)); // angolo dall'asse +Y
-    const bowl = new THREE.Mesh(this.#geo(new THREE.SphereGeometry(r, SEG, 24, 0, Math.PI * 2, thetaMouth, Math.PI - thetaMouth)), glassMat);
-    bowl.position.y = cy;
-    bowl.renderOrder = 2;
-    this.body.add(bowl);
-
+    const cy = 0.06 + stem + r * 0.9;
+    const thetaMouth = Math.asin(Math.min(0.99, mouth / r));
+    add(new THREE.SphereGeometry(r, SEG, 22, 0, Math.PI * 2, thetaMouth, Math.PI - thetaMouth), mats.glass, cy);
     let rimY = cy + Math.cos(thetaMouth) * r;
     let rimR = mouth;
     if (lip > 0) {
-      // labbro svasato del tulipano
-      const lipMesh = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(mouth * 1.18, mouth, lip, SEG, 1, true)), glassMat);
-      lipMesh.position.y = rimY + lip / 2;
-      lipMesh.renderOrder = 2;
-      this.body.add(lipMesh);
+      add(new THREE.CylinderGeometry(mouth * 1.12, mouth, lip, SEG, 1, true), mats.glass, rimY + lip / 2);
       rimY += lip;
-      rimR = mouth * 1.18;
+      rimR = mouth * 1.12;
     }
-    const rim = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(rimR, 0.026, 10, SEG)), frostMat);
-    rim.rotation.x = Math.PI / 2;
-    rim.position.y = rimY;
-    this.body.add(rim);
+    add(new THREE.TorusGeometry(rimR, 0.024, 8, SEG), mats.frost, rimY, Math.PI / 2);
 
     if (beer) {
-      // liquido: sfera più piccola tagliata al livello di riempimento + tappo piatto
-      const lr = r * 0.92;
-      const fillY = Math.cos(thetaMouth) * r * 0.98; // quasi alla bocca
+      // la coppa è piena: liquido pieno e opaco come il tulipano della reference
+      const lr = r * 0.93;
+      const fillY = Math.cos(thetaMouth) * r * 0.82;
       const thetaFill = Math.acos(Math.min(0.99, fillY / lr));
-      const liquidGeo = this.#liquidGeometry(new THREE.SphereGeometry(lr, SEG, 20, 0, Math.PI * 2, thetaFill, Math.PI - thetaFill), beer);
-      const liquid = new THREE.Mesh(this.#geo(liquidGeo), this.#liquidMaterial(beer));
-      liquid.position.y = cy;
-      const capMat = this.#mat(vinylMaterial({ color: new THREE.Color(beer.liquid).lerp(new THREE.Color(0xffffff), 0.18), roughness: 0.62 }));
-      const cap = new THREE.Mesh(this.#geo(new THREE.CircleGeometry(Math.sin(thetaFill) * lr, SEG)), capMat);
-      cap.rotation.x = -Math.PI / 2;
-      cap.position.y = cy + fillY;
-      this.body.add(liquid, cap);
-      this.#addBubbles(beer, lr * 0.55, cy - lr * 0.4, cy + fillY - 0.05);
+      add(this.#liquidGeometry(new THREE.SphereGeometry(lr, SEG, 18, 0, Math.PI * 2, thetaFill, Math.PI - thetaFill), colors), mats.liquid, cy);
+      this.#buildFoam(parts, mats.foam, Math.sin(thetaFill) * lr, cy + fillY, rimR, rimY);
     }
-
-    const foamTop = beer ? this.#buildFoam(beer, rimR, rimY) : rimY;
-    return { kind: 'bowl', faceY: cy - r * 0.05, faceR: r, foamTop, rimY, rt: rimR };
+    return {
+      top: rimY + (beer ? 0.2 : 0.02),
+      faceY: cy + r * 0.05,
+      faceR: r,
+      shoulderY: cy - r * 0.05,
+      shoulderR: r * 0.98,
+      hipY: cy - r * 0.62,
+      hipZ: r * 0.55,
+      hipX: r * 0.42,
+    };
   }
 
   /**
-   * Schiuma da toy: collare che deborda dal bordo, cupola, sbuffi tondi e una goccia
-   * che cola sul davanti a destra.
+   * Schiuma cremosa e liscia (reference): una fascia dentro il vetro dal livello del liquido
+   * fino al bordo, poi un "cappello" un filo più largo del bordo con lo spigolo arrotondato.
    */
-  #buildFoam(beer, rimR, rimY) {
-    const foamMat = this.#foamMaterial(beer);
-    const foam = new THREE.Group();
-    const s = rimR / 0.38; // scala sulla bocca del bicchiere
-
-    const collar = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(rimR * 0.98, 0.085 * s, 14, SEG)), foamMat);
-    collar.rotation.x = Math.PI / 2;
-    collar.position.y = rimY + 0.03;
-    foam.add(collar);
-
-    const dome = new THREE.Mesh(this.#geo(new THREE.SphereGeometry(rimR * 0.98, SEG, 14, 0, Math.PI * 2, 0, Math.PI / 2)), foamMat);
-    dome.scale.y = 0.55;
-    dome.position.y = rimY + 0.03;
-    foam.add(dome);
-
-    const puffGeo = this.#geo(new THREE.SphereGeometry(1, 20, 14));
-    const puffs = [
-      [-0.17, 0.14, 0.06, 0.15],
-      [0.15, 0.16, -0.04, 0.17],
-      [0.0, 0.24, 0.02, 0.15],
-      [-0.05, 0.12, -0.18, 0.13],
-      [0.19, 0.08, 0.15, 0.11],
-    ];
-    for (const [x, y, z, r] of puffs) {
-      const puff = new THREE.Mesh(puffGeo, foamMat);
-      puff.scale.setScalar(r * s);
-      puff.position.set(x * s, rimY + y * s, z * s);
-      foam.add(puff);
-    }
-
-    // goccia di schiuma che cola fuori dal bicchiere
-    const drip = new THREE.Mesh(this.#geo(new THREE.CapsuleGeometry(0.045 * s, 0.14 * s, 6, 12)), foamMat);
-    const a = Math.PI * 0.32;
-    drip.position.set(Math.sin(a) * (rimR + 0.02), rimY - 0.07 * s, Math.cos(a) * (rimR + 0.02));
-    foam.add(drip);
-
-    this.body.add(foam);
-    return rimY + 0.36 * s;
+  #buildFoam(parts, foamMat, innerR, fromY, rimR, rimY) {
+    const add = (geo, y, rx = 0, sy = 1) => {
+      const m = new THREE.Mesh(geo, foamMat);
+      m.position.y = y;
+      m.rotation.x = rx;
+      m.scale.y = sy;
+      parts.add(m);
+    };
+    const band = rimY - fromY;
+    add(new THREE.CylinderGeometry(rimR * 0.95, innerR, band, SEG), fromY + band / 2);
+    const capR = rimR * 1.04;
+    const capH = 0.11;
+    add(new THREE.CylinderGeometry(capR, capR, capH, SEG), rimY + capH / 2 - 0.02);
+    add(new THREE.TorusGeometry(capR - 0.045, 0.045, 10, SEG), rimY + capH - 0.02, Math.PI / 2);
+    // sommità appena bombata
+    add(new THREE.SphereGeometry(capR - 0.045, SEG, 10, 0, Math.PI * 2, 0, Math.PI / 2), rimY + capH - 0.02, 0, 0.16);
   }
 
-  /** Bollicine chiare dentro il liquido (vista attraverso il vetro). */
-  #addBubbles(beer, spread, yMin, yMax) {
-    const mat = this.#mat(vinylMaterial({ color: new THREE.Color(beer.liquid).lerp(new THREE.Color(0xffffff), 0.6), roughness: 0.4, rimStrength: 0.4 }));
-    const geo = this.#geo(new THREE.SphereGeometry(0.028, 8, 6));
-    const seed = [...beer.id].reduce((a, ch) => a + ch.charCodeAt(0), 0);
-    for (let i = 0; i < 5; i++) {
-      const t = ((seed * (i + 3)) % 97) / 97;
-      const ang = ((seed * (i + 7)) % 360) * (Math.PI / 180);
-      const b = new THREE.Mesh(geo, mat);
-      b.position.set(Math.cos(ang) * spread * 0.9, yMin + (yMax - yMin) * t, Math.abs(Math.sin(ang)) * spread * 0.9 + 0.02);
-      this.body.add(b);
-    }
-  }
-
-  // ------------------------------------------------------------------ faccina
+  // ------------------------------------------------------------------ faccina e arti
 
   #buildFace(g, beer) {
-    const faceY = g.faceY;
-    const faceR = g.faceR + 0.012; // stampata sul vetro, davanti (+Z, verso la camera)
-    const dark = beer && luminance(beer.liquid) < 0.12;
-    const inkColor = dark ? 0xf4ead5 : 0x1a100a;
-    const ink = this.#mat(vinylMaterial({ color: inkColor, roughness: 0.25, rimStrength: 0.3 })); // occhi lucidi
-    const spread = Math.min(0.13, faceR * 0.4);
-    const onSurface = (x, y, push = 0) => {
-      const ang = Math.asin(Math.max(-0.95, Math.min(0.95, x / faceR)));
-      return new THREE.Vector3(Math.sin(ang) * (faceR + push), y, Math.cos(ang) * (faceR + push));
+    const faceR = g.faceR + 0.01; // stampata sul vetro, sul davanti (+Z verso la camera)
+    const ink = this.#mat(vinylMaterial({ color: 0x0b0b0d, roughness: 0.22, rimStrength: 0.2 }));
+    const onSurface = (x, y) => {
+      const ang = Math.asin(Math.max(-0.9, Math.min(0.9, x / faceR)));
+      return new THREE.Vector3(Math.sin(ang) * faceR, y, Math.cos(ang) * faceR);
     };
+    const spread = Math.min(0.1, faceR * 0.3);
+    this.eyes.position.set(0, 0, 0);
+    this.body.add(this.eyes);
 
     if (beer) {
-      const eyeGeo = this.#geo(new THREE.SphereGeometry(0.06, 18, 14));
-      const sparkleGeo = this.#geo(new THREE.SphereGeometry(0.018, 8, 6));
-      const sparkleMat = this.#mat(new THREE.MeshBasicMaterial({ color: dark ? 0x1a100a : 0xffffff }));
+      // occhi a puntino con un minuscolo riflesso: piccoli, come nella reference
+      const eyeGeo = this.#geo(new THREE.SphereGeometry(0.034, 14, 10));
+      const sparkleGeo = this.#geo(new THREE.SphereGeometry(0.01, 6, 4));
+      const sparkleMat = this.#mat(new THREE.MeshBasicMaterial({ color: 0xffffff }));
       for (const side of [-1, 1]) {
         const eye = new THREE.Mesh(eyeGeo, ink);
-        eye.scale.set(1, 1.2, 0.5);
-        eye.position.copy(onSurface(side * spread, faceY));
+        eye.scale.set(1, 1.15, 0.55);
+        eye.position.copy(onSurface(side * spread, g.faceY));
         const sparkle = new THREE.Mesh(sparkleGeo, sparkleMat);
-        sparkle.position.set(0.02, 0.025, 0.05);
+        sparkle.position.set(0.012, 0.014, 0.03);
         eye.add(sparkle);
-        this.body.add(eye);
+        this.eyes.add(eye);
       }
-      const smile = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(0.06, 0.015, 8, 20, Math.PI)), ink);
+      const smile = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(0.03, 0.008, 6, 16, Math.PI)), ink);
       smile.rotation.z = Math.PI;
-      smile.position.copy(onSurface(0, faceY - 0.085, 0.004));
+      smile.position.copy(onSurface(0, g.faceY - 0.06));
       this.body.add(smile);
     } else {
-      // bicchiere vuoto: occhi chiusi (archetti) — "è uscito dal pub"
+      // vuoto: occhi chiusi (archetti)
       for (const side of [-1, 1]) {
-        const lid = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(0.045, 0.012, 6, 14, Math.PI)), ink);
+        const lid = new THREE.Mesh(this.#geo(new THREE.TorusGeometry(0.032, 0.008, 6, 12, Math.PI)), ink);
         lid.rotation.z = Math.PI;
-        lid.position.copy(onSurface(side * spread, faceY));
-        this.body.add(lid);
+        lid.position.copy(onSurface(side * spread, g.faceY));
+        this.eyes.add(lid);
       }
     }
+  }
 
-    const blushMat = this.#mat(new THREE.MeshBasicMaterial({ color: 0xff7a8a, transparent: true, opacity: 0.45, depthWrite: false }));
-    const blushGeo = this.#geo(new THREE.CircleGeometry(0.042, 16));
+  /** Braccine e gambette a "tubo" con mani e piedi tondi, ognuna su un perno animabile. */
+  #buildLimbs(g, colors) {
+    const mat = this.#mat(vinylMaterial({ color: colors.limb, roughness: colors.dark ? 0.5 : 0.45, rimStrength: 1.2 }));
+    const limbGeometry = (points, endRadius, endScale, tubeR) => {
+      const curve = new THREE.CatmullRomCurve3(points.map((p) => new THREE.Vector3(...p)));
+      const tube = new THREE.TubeGeometry(curve, 12, tubeR, 8, false);
+      const end = new THREE.SphereGeometry(endRadius, 14, 10);
+      end.scale(...endScale);
+      const tip = points[points.length - 1];
+      end.translate(tip[0], tip[1], tip[2]);
+      // tappo rotondo sulla spalla/anca
+      const cap = new THREE.SphereGeometry(tubeR, 10, 8);
+      const merged = mergeGeometries([tube.toNonIndexed(), end.toNonIndexed(), cap.toNonIndexed()]);
+      [tube, end, cap].forEach((x) => x.dispose());
+      return this.#geo(merged);
+    };
+
+    this.arms = [];
+    this.legs = [];
     for (const side of [-1, 1]) {
-      const p = onSurface(side * spread * 1.55, faceY - 0.075, 0.002);
-      const blush = new THREE.Mesh(blushGeo, blushMat);
-      blush.position.copy(p);
-      blush.rotation.y = Math.atan2(p.x, p.z);
-      this.body.add(blush);
+      // braccio: dalla spalla scende piegato verso l'esterno; mano tonda
+      const arm = new THREE.Group();
+      arm.position.set(side * (g.shoulderR - 0.01), g.shoulderY, 0.03);
+      arm.add(new THREE.Mesh(limbGeometry([[0, 0, 0], [side * 0.1, -0.05, 0.02], [side * 0.15, -0.19, 0.05], [side * 0.15, -0.27, 0.06]], 0.055, [1, 1, 1], 0.034), mat));
+      arm.rotation.z = side * 0.2;
+      this.body.add(arm);
+      this.arms.push(arm);
+
+      // gamba: dall'anca va in avanti e giù fino al bancone; piede a fagiolo con la punta in su
+      const drop = g.hipY - 0.035;
+      const leg = new THREE.Group();
+      leg.position.set(side * g.hipX, g.hipY, g.hipZ);
+      leg.add(
+        new THREE.Mesh(
+          limbGeometry([[0, 0, 0], [side * 0.02, -drop * 0.6, 0.12], [side * 0.03, -drop, 0.27]], 0.06, [1, 0.85, 1.5], 0.04),
+          mat,
+        ),
+      );
+      this.body.add(leg);
+      this.legs.push(leg);
     }
   }
 
   // ------------------------------------------------------------------ util
+
+  /** Fonde le parti fisse per materiale: molte meno draw call, stesso aspetto. */
+  #mergeInto(parts) {
+    parts.updateMatrixWorld(true);
+    const byMaterial = new Map();
+    parts.traverse((o) => {
+      if (!o.isMesh) return;
+      const geo = o.geometry.toNonIndexed();
+      geo.applyMatrix4(o.matrixWorld);
+      for (const name of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv', 'color'].includes(name)) geo.deleteAttribute(name);
+      if (!byMaterial.has(o.material)) byMaterial.set(o.material, []);
+      byMaterial.get(o.material).push(geo);
+      o.geometry.dispose();
+    });
+    for (const [material, geos] of byMaterial) {
+      const merged = geos.length === 1 ? geos[0] : mergeGeometries(geos);
+      if (geos.length > 1) geos.forEach((g) => g.dispose());
+      const mesh = new THREE.Mesh(this.#geo(merged), material);
+      if (material.transparent) mesh.renderOrder = 2;
+      this.body.add(mesh);
+    }
+  }
 
   #applyDim() {
     for (const m of this.#materials) {
@@ -399,9 +403,13 @@ export class BeerAvatar {
 
   #clear() {
     this.body.clear();
+    this.eyes.clear();
     this.#materials.forEach((m) => m.dispose());
     this.#geometries.forEach((g) => g.dispose());
     this.#materials = [];
     this.#geometries = [];
+    this._mats = null;
+    this.arms = [];
+    this.legs = [];
   }
 }

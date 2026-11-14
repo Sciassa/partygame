@@ -10,16 +10,16 @@ export const SEGMENT_TYPE = Object.freeze({
 });
 
 /**
- * Aspetto e testi di ogni tipo di spicchio. Palette "pub": toni gioiello saturi ma profondi,
- * che staccano sul fondo blu notte senza sembrare un giocattolo.
- *  - color: colore dello spicchio sulla ruota
+ * Aspetto e testi di ogni tipo di spicchio. Come nella reference: spicchi blu notte quasi neri,
+ * appena tinti per tipo, con decori e scritte in oro; il colore vivo (glow) è per luci e UI.
+ *  - color: colore (scuro) dello spicchio sulla ruota
  *  - glow:  versione più luminosa per luci, testi e UI
  *  - icon:  icona vettoriale disegnata sulla texture (vedi wheelTexture.js)
  */
 export const SEGMENT_INFO = Object.freeze({
-  [SEGMENT_TYPE.TRIVIA]: { label: 'TRIVIA', emoji: '❓', icon: 'question', color: '#1f7f86', glow: '#3fd0d4', description: 'Domanda a risposta multipla per tutti!' },
-  [SEGMENT_TYPE.MINIGAME]: { label: 'MINIGIOCO', emoji: '⚡', icon: 'bolt', color: '#9e2742', glow: '#ff5a7e', description: 'Sfida lampo sui telefoni!' },
-  [SEGMENT_TYPE.FORTUNE]: { label: 'FORTUNA', emoji: '🪙', icon: 'coin', color: '#c98a1e', glow: '#ffc251', description: 'Monete in regalo... o forse no.' },
+  [SEGMENT_TYPE.TRIVIA]: { label: 'TRIVIA', emoji: '❓', icon: 'question', color: '#152a33', glow: '#46c9c9', description: 'Domanda a risposta multipla per tutti!' },
+  [SEGMENT_TYPE.MINIGAME]: { label: 'MINIGIOCO', emoji: '⚡', icon: 'bolt', color: '#2c1823', glow: '#ff7a8f', description: 'Sfida lampo sui telefoni!' },
+  [SEGMENT_TYPE.FORTUNE]: { label: 'FORTUNA', emoji: '🪙', icon: 'coin', color: '#2e2414', glow: '#ffb547', description: 'Monete in regalo... o forse no.' },
 });
 
 const BASE_LAYOUT = [

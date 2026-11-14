@@ -97,8 +97,14 @@ Con un passo di Eulero dentro `requestAnimationFrame`, una TV a 60 Hz e un telef
 - la stanza è piena con 12 giocatori **connessi**, uno per birra.
 
 - Chi entra riceve una birra libera **a caso**. Al primo ingresso il telefono propone il selettore; la birra si può cambiare in ogni momento toccando il proprio nome (`avatar:pick { beerId }`, l'host verifica che sia libera).
-- Sul palco 3D ogni giocatore è un bicchiere "designer toy" fatto di primitive (cilindri, sfere, torus): liquido sfumato, schiuma a sbuffi che deborda con una goccia, faccina che atterra sul bancone con un rimbalzo elastico. Chi è di turno saltella con un anello luminoso, chi si disconnette sbiadisce e crolla di lato, chi vince monete fa una giravolta.
-- È un placeholder procedurale: `BeerAvatar` ha un'API minima (`setBeer`, `setDimmed`, `dispose`), così si può sostituire con modelli GLB senza toccare il resto.
+- Sul palco 3D ogni giocatore è un bicchiere "designer toy" come nella reference: vetro smerigliato, liquido sfumato, schiuma cremosa che deborda appena, faccina minimale, **braccine e gambette a tubo** del colore della birra (nere per le scure). Le birre stanno sedute sul bancone ai lati della ruota; sui telefoni stanno in fila davanti al piedistallo.
+- **Sono vive** (`AvatarLineup`):
+  - in attesa dondolano le gambe, respirano, sbattono le palpebre e ogni tanto fanno un'azione a caso: salutano, calciano, mettono le mani sui fianchi, guardano la ruota, saltellano, brindano, fanno le bollicine o dondolano;
+  - chi è di turno saltella e sbraccia;
+  - durante lo spin si girano verso la ruota, tifano e sobbalzano a ogni scatto del puntatore;
+  - al risultato applaudono, e chi vince monete fa una giravolta tra le bollicine;
+  - chi si disconnette resta come bicchiere vuoto, accasciato.
+- È tutto procedurale (primitive three.js, parti fisse fuse per materiale: circa 10 draw call per birra). `BeerAvatar` ha un'API minima (`setBeer`, `setDimmed`, `arms`, `legs`, `eyes`), quindi in futuro si può passare a modelli GLB senza toccare il resto.
 
 ### Robustezza di rete
 
@@ -118,7 +124,8 @@ Con un passo di Eulero dentro `requestAnimationFrame`, una TV a 60 Hz e un telef
 ### Look "vinyl toy" e luci
 
 - **Materiali** (`shared/stage/vinyl.js`): MeshStandardMaterial con metalness 0 e roughness alta, più una luce di taglio ambra calcolata nello shader (Fresnel) che accende sempre le sagome dal lato della luce.
-- **Luci** (`shared/stage/PubSet.js`): faretto ambra principale, due controluce arancio radenti, fill freddo debolissimo, neon rosa e teal, environment map da studio.
+- **Ruota** (`shared/wheel/WheelModel.js`): come la reference, con corpo blu notte spesso, anello e borchie oro (le borchie sono i pioli del puntatore), filo neon ambra a segmenti (rincorsa durante lo spin, lampeggio sullo spicchio vincente), mozzo a cupola con mezzaluna ambra, puntatore con lampada che "scatta" a ogni borchia e piedistallo con bordo oro, mezza cupola luminosa e LED.
+- **Luci e ambiente** (`shared/stage/PubSet.js`): faretto caldo principale, due controluce arancio radenti, fill freddo debolissimo, lampade calde ai lati, fondale di pub fuori fuoco (bokeh), foschia leggera e environment map da studio.
 - **Ombre:** solo in qualità alta, dal faretto, con `PCFShadowMap` e `shadow.radius` (penombra larga). In three r187 `PCFSoftShadowMap` è stato rimosso e ripiega su PCF con un avviso. Sotto ogni bicchiere c'è anche un'ombra di contatto sfumata, che resta attiva sui telefoni.
 - **60 fps:** se la media scende sotto 50 fps, `StageRenderer` toglie nell'ordine ombre, bloom e risoluzione.
 

@@ -2,8 +2,8 @@ import { TAU } from './kinematics.js';
 import { segmentInfo } from './segments.js';
 
 export const WHEEL_FONT = '"Oswald", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif';
-const CREAM = '#f4ead5';
-const BRASS = '#d4a24c';
+const GOLD = '#d9a94f';
+const GOLD_LIGHT = '#f3d595';
 
 /** Schiarisce (amount>0) o scurisce (amount<0) un colore #rrggbb. */
 export function shade(hex, amount) {
@@ -15,10 +15,12 @@ export function shade(hex, amount) {
 }
 
 /**
- * Disegna la faccia della ruota su un canvas 2D (diventa la texture della CircleGeometry).
+ * Faccia della ruota (texture della CircleGeometry), nello stile della reference:
+ * spicchi blu notte opachi, separatori oro doppi, decori art déco a raggiera e scritte oro.
+ *
  * Mappatura: centro canvas = centro ruota, alto canvas = +Y. Lo spicchio i occupa gli angoli locali
- * [i*s, (i+1)*s) da +Y in senso antiorario (vedi kinematics.js), che nel canvas (y verso il basso)
- * corrispondono agli angoli arc() da -π/2 - i*s a -π/2 - (i+1)*s, percorsi in senso antiorario.
+ * [i*s, (i+1)*s) da +Y in senso antiorario (vedi kinematics.js), cioè nel canvas (y verso il basso)
+ * gli angoli arc() da -π/2 - i*s a -π/2 - (i+1)*s, percorsi in senso antiorario.
  */
 export function drawWheelFace(canvas, segments, size) {
   canvas.width = size;
@@ -31,47 +33,77 @@ export function drawWheelFace(canvas, segments, size) {
 
   ctx.clearRect(0, 0, size, size);
 
-  // Spicchi: colore pieno con vignettatura verso il centro (profondità, niente effetto "plastica")
   segments.forEach((segment, i) => {
     const { color } = segmentInfo(segment);
     const a0 = -Math.PI / 2 - i * s;
+    const a1 = a0 - s;
+
+    // fondo: vinile scuro, appena più chiaro verso il bordo (alternato per dare ritmo)
     ctx.beginPath();
     ctx.moveTo(c, c);
-    ctx.arc(c, c, r, a0, a0 - s, true);
+    ctx.arc(c, c, r, a0, a1, true);
     ctx.closePath();
-    const grad = ctx.createRadialGradient(c, c, r * 0.1, c, c, r);
-    grad.addColorStop(0, shade(color, -0.7));
-    grad.addColorStop(0.5, shade(color, -0.3));
-    grad.addColorStop(0.9, color);
-    grad.addColorStop(1, shade(color, 0.12));
+    const grad = ctx.createRadialGradient(c, c, r * 0.15, c, c, r);
+    grad.addColorStop(0, shade(color, -0.45));
+    grad.addColorStop(0.7, i % 2 ? shade(color, 0.03) : color);
+    grad.addColorStop(1, shade(color, i % 2 ? 0.1 : 0.06));
     ctx.fillStyle = grad;
     ctx.fill();
+
+    // decoro art déco: raggiera sottile dal mozzo verso il bordo + chevron
+    ctx.save();
+    ctx.translate(c, c);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, r, a0, a1, true);
+    ctx.closePath();
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(217, 169, 79, 0.32)';
+    ctx.lineWidth = size * 0.0025;
+    const mid = a0 - s / 2;
+    const apex = [Math.cos(mid) * r * 0.24, Math.sin(mid) * r * 0.24];
+    for (let k = -2; k <= 2; k++) {
+      const a = mid + k * s * 0.17;
+      ctx.beginPath();
+      ctx.moveTo(apex[0], apex[1]);
+      ctx.lineTo(Math.cos(a) * r * 1.02, Math.sin(a) * r * 1.02);
+      ctx.stroke();
+    }
+    for (const rr of [0.78, 0.83]) {
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a0 - s * 0.12) * r * rr, Math.sin(a0 - s * 0.12) * r * rr);
+      ctx.lineTo(Math.cos(mid) * r * (rr + 0.05), Math.sin(mid) * r * (rr + 0.05));
+      ctx.lineTo(Math.cos(a1 + s * 0.12) * r * rr, Math.sin(a1 + s * 0.12) * r * rr);
+      ctx.stroke();
+    }
+    ctx.restore();
   });
 
-  // Filetto ottone interno, vicino al bordo
-  ctx.beginPath();
-  ctx.arc(c, c, r * 0.955, 0, TAU);
-  ctx.lineWidth = size * 0.004;
-  ctx.strokeStyle = 'rgba(212, 162, 76, 0.55)';
-  ctx.stroke();
-
-  // Separatori in ottone
+  // Separatori oro doppi (scanalatura scura nel mezzo)
   ctx.save();
   ctx.translate(c, c);
-  ctx.strokeStyle = BRASS;
-  ctx.lineWidth = size * 0.005;
   ctx.lineCap = 'round';
   for (let i = 0; i < n; i++) {
     const a = -Math.PI / 2 - i * s;
+    const from = [Math.cos(a) * r * 0.2, Math.sin(a) * r * 0.2];
+    const to = [Math.cos(a) * r, Math.sin(a) * r];
+    ctx.strokeStyle = GOLD;
+    ctx.lineWidth = size * 0.012;
     ctx.beginPath();
-    ctx.moveTo(Math.cos(a) * r * 0.17, Math.sin(a) * r * 0.17);
-    ctx.lineTo(Math.cos(a) * r * 0.995, Math.sin(a) * r * 0.995);
+    ctx.moveTo(...from);
+    ctx.lineTo(...to);
+    ctx.stroke();
+    ctx.strokeStyle = '#0d1018';
+    ctx.lineWidth = size * 0.004;
+    ctx.beginPath();
+    ctx.moveTo(...from);
+    ctx.lineTo(...to);
     ctx.stroke();
   }
   ctx.restore();
 
-  // Etichette (lungo il raggio, dal centro verso il bordo) e icone (in piedi verso l'esterno)
-  const chordAtLabel = 2 * r * 0.55 * Math.sin(s / 2);
+  // Scritte (lungo il raggio) e icone (in piedi verso l'esterno), in oro
+  const chordAtLabel = 2 * r * 0.56 * Math.sin(s / 2);
   segments.forEach((segment, i) => {
     const info = segmentInfo(segment);
     const center = -Math.PI / 2 - (i + 0.5) * s;
@@ -79,62 +111,56 @@ export function drawWheelFace(canvas, segments, size) {
     ctx.save();
     ctx.translate(c, c);
     ctx.rotate(center);
-    const maxWidth = r * 0.44;
-    let fontSize = Math.min(chordAtLabel * 0.6, r * 0.105);
-    ctx.font = `700 ${fontSize}px ${WHEEL_FONT}`;
+    const maxWidth = r * 0.42;
+    let fontSize = Math.min(chordAtLabel * 0.5, r * 0.1);
+    ctx.font = `600 ${fontSize}px ${WHEEL_FONT}`;
     const w = ctx.measureText(info.label).width;
     if (w > maxWidth) {
       fontSize *= maxWidth / w;
-      ctx.font = `700 ${fontSize}px ${WHEEL_FONT}`;
+      ctx.font = `600 ${fontSize}px ${WHEEL_FONT}`;
     }
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.shadowColor = 'rgba(0,0,0,0.55)';
-    ctx.shadowBlur = fontSize * 0.25;
-    ctx.shadowOffsetY = fontSize * 0.05;
-    ctx.fillStyle = CREAM;
-    ctx.fillText(info.label, r * 0.53, 0);
+    const textGrad = ctx.createLinearGradient(0, -fontSize / 2, 0, fontSize / 2);
+    textGrad.addColorStop(0, GOLD_LIGHT);
+    textGrad.addColorStop(1, GOLD);
+    ctx.shadowColor = 'rgba(0,0,0,0.7)';
+    ctx.shadowBlur = fontSize * 0.2;
+    ctx.fillStyle = textGrad;
+    ctx.fillText(info.label, r * 0.55, 0);
     ctx.restore();
 
     ctx.save();
     ctx.translate(c, c);
     ctx.rotate(center + Math.PI / 2);
-    ctx.translate(0, -r * 0.84);
-    const iconSize = Math.min(2 * r * 0.84 * Math.sin(s / 2) * 0.55, r * 0.11);
+    ctx.translate(0, -r * 0.88);
+    const iconSize = Math.min(2 * r * 0.88 * Math.sin(s / 2) * 0.42, r * 0.085);
     drawIcon(ctx, info.icon, iconSize);
 
     // Adesivi applicati (placeholder grafico: un bollino per adesivo)
     segment.stickers?.forEach((sticker, k) => {
       ctx.beginPath();
-      ctx.arc((k - (segment.stickers.length - 1) / 2) * iconSize * 0.6, r * 0.15, iconSize * 0.2, 0, TAU);
-      ctx.fillStyle = sticker.color ?? CREAM;
+      ctx.arc((k - (segment.stickers.length - 1) / 2) * iconSize * 0.7, r * 0.16, iconSize * 0.22, 0, TAU);
+      ctx.fillStyle = sticker.color ?? GOLD_LIGHT;
       ctx.fill();
     });
     ctx.restore();
   });
 
-  // Mozzo: anello scuro sotto il tappo 3D
+  // Anello oro sottile attorno al mozzo
   ctx.beginPath();
-  ctx.arc(c, c, r * 0.17, 0, TAU);
-  ctx.fillStyle = '#120d0a';
-  ctx.fill();
-
-  // Leggera lucidatura satinata dall'alto
-  const sheen = ctx.createLinearGradient(0, 0, 0, size);
-  sheen.addColorStop(0, 'rgba(255,240,210,0.08)');
-  sheen.addColorStop(0.45, 'rgba(255,240,210,0.0)');
-  ctx.beginPath();
-  ctx.arc(c, c, r, 0, TAU);
-  ctx.fillStyle = sheen;
-  ctx.fill();
+  ctx.arc(c, c, r * 0.2, 0, TAU);
+  ctx.lineWidth = size * 0.008;
+  ctx.strokeStyle = GOLD;
+  ctx.stroke();
 }
 
-/** Icone vettoriali (crema) centrate in (0,0), alte circa `size`. */
+/** Icone vettoriali oro, centrate in (0,0), alte circa `size`. */
 function drawIcon(ctx, icon, size) {
   ctx.save();
-  ctx.fillStyle = CREAM;
-  ctx.strokeStyle = CREAM;
-  ctx.shadowColor = 'rgba(0,0,0,0.5)';
+  ctx.fillStyle = GOLD_LIGHT;
+  ctx.strokeStyle = GOLD_LIGHT;
+  ctx.shadowColor = 'rgba(0,0,0,0.6)';
   ctx.shadowBlur = size * 0.15;
   const u = size / 2;
   switch (icon) {
@@ -155,15 +181,10 @@ function drawIcon(ctx, icon, size) {
       ctx.beginPath();
       ctx.arc(0, 0, u * 0.86, 0, TAU);
       ctx.stroke();
-      ctx.lineWidth = u * 0.07;
-      ctx.beginPath();
-      ctx.arc(0, 0, u * 0.6, 0, TAU);
-      ctx.stroke();
-      // stellina a 4 punte al centro
       ctx.beginPath();
       for (let k = 0; k < 8; k++) {
         const a = (k * Math.PI) / 4 - Math.PI / 2;
-        const rr = k % 2 === 0 ? u * 0.42 : u * 0.13;
+        const rr = k % 2 === 0 ? u * 0.5 : u * 0.15;
         ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
       }
       ctx.closePath();
@@ -171,7 +192,7 @@ function drawIcon(ctx, icon, size) {
       break;
     }
     default: {
-      ctx.font = `700 ${size * 1.25}px ${WHEEL_FONT}`;
+      ctx.font = `600 ${size * 1.3}px ${WHEEL_FONT}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('?', 0, size * 0.05);
@@ -180,7 +201,7 @@ function drawIcon(ctx, icon, size) {
   ctx.restore();
 }
 
-/** Texture radiale morbida (alone ambra dietro la ruota, pozze di luce). */
+/** Texture radiale morbida (aloni, ombre di contatto, bagliori). */
 export function drawGlow(canvas, size, inner, outer = 'rgba(0,0,0,0)') {
   canvas.width = size;
   canvas.height = size;
@@ -192,24 +213,85 @@ export function drawGlow(canvas, size, inner, outer = 'rgba(0,0,0,0)') {
   ctx.fillRect(0, 0, size, size);
 }
 
-/** Muro di mattoni scuri, appena percettibile: dà profondità al fondo "pub". */
-export function drawBrickWall(canvas, size) {
+/**
+ * Fondale "pub fuori fuoco" come nella reference: legno scuro, travi verticali sfocate,
+ * lampade calde in bokeh e un filo di teal lontano. Disegnato una volta, costo zero a runtime.
+ */
+export function drawPubBokeh(canvas, width, height) {
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  let seed = 11;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+  const base = ctx.createLinearGradient(0, 0, 0, height);
+  base.addColorStop(0, '#07080c');
+  base.addColorStop(0.55, '#120e0c');
+  base.addColorStop(1, '#0a0909');
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, width, height);
+
+  // travi/scaffali di legno, sfocati
+  ctx.filter = `blur(${Math.round(width * 0.006)}px)`;
+  for (let i = 0; i < 9; i++) {
+    const x = rand() * width;
+    const w = width * (0.015 + rand() * 0.035);
+    ctx.fillStyle = `rgba(${40 + rand() * 25}, ${24 + rand() * 12}, ${14 + rand() * 8}, ${0.35 + rand() * 0.3})`;
+    ctx.fillRect(x, 0, w, height);
+  }
+  for (let i = 0; i < 4; i++) {
+    const y = height * (0.2 + rand() * 0.45);
+    ctx.fillStyle = `rgba(48, 30, 18, ${0.25 + rand() * 0.2})`;
+    ctx.fillRect(0, y, width, height * 0.012);
+  }
+  ctx.filter = 'none';
+
+  // bokeh: lampade calde e riflessi
+  const blob = (x, y, rad, color, alpha) => {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+    g.addColorStop(0, color.replace('A', alpha));
+    g.addColorStop(0.55, color.replace('A', alpha * 0.45));
+    g.addColorStop(1, color.replace('A', 0));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, rad, 0, TAU);
+    ctx.fill();
+  };
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 26; i++) {
+    const x = rand() * width;
+    const y = height * (0.15 + rand() * 0.6);
+    blob(x, y, width * (0.008 + rand() * 0.03), 'rgba(255,170,80,A)', 0.12 + rand() * 0.35);
+  }
+  // due lampade "vere" più grandi, come nella reference (sinistra in basso, destra in alto)
+  blob(width * 0.12, height * 0.62, width * 0.05, 'rgba(255,175,90,A)', 0.85);
+  blob(width * 0.8, height * 0.26, width * 0.045, 'rgba(255,160,80,A)', 0.6);
+  blob(width * 0.95, height * 0.45, width * 0.06, 'rgba(70,170,190,A)', 0.18);
+  ctx.globalCompositeOperation = 'source-over';
+
+  // vignettatura
+  const v = ctx.createRadialGradient(width / 2, height * 0.45, height * 0.2, width / 2, height * 0.45, width * 0.7);
+  v.addColorStop(0, 'rgba(0,0,0,0)');
+  v.addColorStop(1, 'rgba(0,0,0,0.75)');
+  ctx.fillStyle = v;
+  ctx.fillRect(0, 0, width, height);
+}
+
+/** Nuvola di fumo morbida per la foschia del locale. */
+export function drawHaze(canvas, size) {
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#0a0d14';
-  ctx.fillRect(0, 0, size, size);
-  const rows = 8;
-  const bh = size / rows;
-  const bw = bh * 2.1;
-  let seed = 7;
-  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  for (let row = 0; row < rows; row++) {
-    const offset = row % 2 ? bw / 2 : 0;
-    for (let x = -bw; x < size + bw; x += bw) {
-      const l = 14 + rand() * 7;
-      ctx.fillStyle = `hsl(${220 + rand() * 12}, 18%, ${l * 0.55}%)`;
-      ctx.fillRect(x + offset + bh * 0.06, row * bh + bh * 0.06, bw - bh * 0.12, bh - bh * 0.12);
-    }
+  let seed = 3;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 40; i++) {
+    const x = size * (0.2 + rand() * 0.6);
+    const y = size * (0.3 + rand() * 0.4);
+    const rad = size * (0.08 + rand() * 0.18);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+    g.addColorStop(0, 'rgba(255,255,255,0.09)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
   }
 }

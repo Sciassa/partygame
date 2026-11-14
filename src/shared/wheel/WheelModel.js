@@ -1,26 +1,32 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { TAU, segmentIndexAt } from './kinematics.js';
 import { drawWheelFace } from './wheelTexture.js';
 import { enableShadows, vinylMaterial } from '../stage/vinyl.js';
 
 export const WHEEL_RADIUS = 3;
 const R = WHEEL_RADIUS;
-const BULB_COUNT = 36;
+/** Raggio della faccia con gli spicchi (dentro il bordo spesso). */
+export const FACE_RADIUS = R * 0.85;
+const GOLD_RING_R = R * 0.875;
+const NEON_R = R * 0.842;
+/** Altezza del piedistallo sotto la ruota: il set piazza il bancone a questa quota. */
+export const STAND_FLOOR_Y = -R - 1.35;
 
-/** Palette materiali "pub": tutto opaco/satinato, metalness 0 (l'ottone è un colore, non un metallo). */
+/** Palette della reference: vinile blu notte opaco, oro, ambra luminosa. Metalness sempre 0. */
 const PALETTE = {
-  walnut: 0x22160f,
-  matteBlack: 0x161a24, // nero-blu vinile
-  brass: 0xd4a24c, // oro opaco
-  cream: 0xf4ead5,
-  ruby: 0xc81d43,
-  bulb: new THREE.Color('#ffb257'),
-  neon: new THREE.Color('#ff3d7f'),
+  navy: 0x26304a,
+  navyDark: 0x161b29,
+  gold: 0xd9a94f,
+  amber: new THREE.Color('#ff9d3a'),
 };
 
 /**
- * Modello 3D della ruota: parte rotante (faccia, pioli, tappo-mozzo) + cornice fissa
- * (anello, lampadine "marquee", tubo neon) + puntatore a molla.
+ * Modello 3D della ruota sul suo piedistallo (come nella reference "ruota dark"):
+ *  - parte rotante: faccia con spicchi, filo neon ambra a segmenti, borchie oro (= pioli), mozzo
+ *    a cupola con mezzaluna ambra
+ *  - parte fissa: bordo spesso blu notte, anello oro, alloggiamento del puntatore con lampada,
+ *    piedistallo con bordo oro, luce a mezza cupola e tre LED
  * Non gestisce il tempo dello spin: riceve l'angolo da StageRenderer.
  */
 export class WheelModel {
@@ -28,8 +34,10 @@ export class WheelModel {
   segments = [];
   angle = 0;
   lastIndex = -1;
+  highlightIndex = -1;
   #pointer = { angle: 0, velocity: 0 };
   #lights = { mode: 'idle', color: new THREE.Color(), since: 0 };
+  #lampFlash = 0;
   #tmpColor = new THREE.Color();
 
   constructor({ textureSize = 2048, anisotropy = 1 } = {}) {
@@ -37,29 +45,29 @@ export class WheelModel {
     this.#buildRotating(anisotropy);
     this.#buildFrame();
     this.#buildPointer();
-    // ombre: la ruota proietta sul muro, puntatore e pioli proiettano sulla faccia
+    this.#buildStand();
     enableShadows(this.root);
-    this.bulbs.castShadow = false;
-    this.neon.castShadow = false;
+    for (const glowing of [this.lamp, this.baseDome, this.leds, this.crescent]) glowing.castShadow = false;
   }
 
   setSegments(segments) {
     this.segments = segments;
     drawWheelFace(this.faceCanvas, segments, this.textureSize);
     this.faceTexture.needsUpdate = true;
-    this.#buildPegs(segments.length);
+    this.#buildStuds(segments.length);
+    this.#buildNeonArcs(segments.length);
     this.lastIndex = segments.length ? segmentIndexAt(this.angle, segments.length) : -1;
   }
 
   /** Ridisegna la texture (es. quando il web font è finalmente caricato). */
   redraw() {
-    if (this.segments.length) this.setSegments(this.segments);
+    if (this.segments.length) {
+      drawWheelFace(this.faceCanvas, this.segments, this.textureSize);
+      this.faceTexture.needsUpdate = true;
+    }
   }
 
-  /**
-   * Imposta l'angolo. Restituisce true se il puntatore è appena passato su un nuovo spicchio
-   * (= ha sbattuto contro un piolo).
-   */
+  /** Imposta l'angolo. Restituisce true se il puntatore ha appena passato una borchia. */
   setAngle(angle) {
     this.angle = angle;
     this.rotating.rotation.z = angle;
@@ -71,9 +79,10 @@ export class WheelModel {
     return true;
   }
 
-  /** Il piolo spinge il puntatore nel verso di rotazione, più forte a velocità alta (rad/s). */
+  /** La borchia spinge il puntatore (più forte a velocità alta, rad/s) e la lampada lampeggia. */
   kickPointer(speed) {
-    this.#pointer.angle = Math.min(0.55, this.#pointer.angle + 0.1 + speed * 0.03);
+    this.#pointer.angle = Math.min(0.5, this.#pointer.angle + 0.1 + speed * 0.028);
+    this.#lampFlash = 1;
   }
 
   setLights(mode, color = '#ffffff', now = 0) {
@@ -81,6 +90,7 @@ export class WheelModel {
   }
 
   setHighlight(index) {
+    this.highlightIndex = index;
     if (index < 0 || !this.segments.length) {
       this.highlight.visible = false;
       return;
@@ -88,13 +98,12 @@ export class WheelModel {
     const s = TAU / this.segments.length;
     this.highlight.geometry.dispose();
     // CircleGeometry misura thetaStart da +X: lo spicchio i parte da +Y + i*s
-    this.highlight.geometry = new THREE.CircleGeometry(R * 0.995, 32, Math.PI / 2 + index * s, s);
+    this.highlight.geometry = new THREE.CircleGeometry(FACE_RADIUS, 32, Math.PI / 2 + index * s, s);
     this.highlight.visible = true;
   }
 
   update(t, dt) {
-    // Molla smorzata del puntatore, integrata a passi fissi (1/240 s): stabile anche se il frame
-    // rate crolla (con un dt di 0.1 s una molla così rigida "esploderebbe")
+    // Molla del puntatore a passi fissi (stabile anche se il frame rate crolla)
     const p = this.#pointer;
     const STEP = 1 / 240;
     for (let left = dt; left > 0; left -= STEP) {
@@ -104,9 +113,15 @@ export class WheelModel {
     }
     this.pointerPivot.rotation.z = p.angle;
 
-    if (this.highlight.visible) this.highlight.material.opacity = 0.1 + 0.08 * Math.sin(t * 7);
-    this.neon.material.color.copy(PALETTE.neon).multiplyScalar(2.2 + 0.25 * Math.sin(t * 3.1) + (Math.random() < 0.004 ? -1.2 : 0));
-    this.#updateBulbs(t);
+    // Lampada del puntatore: brace calda che "scatta" a ogni borchia
+    this.#lampFlash = Math.max(0, this.#lampFlash - dt * 6);
+    const breathe = 0.85 + 0.15 * Math.sin(t * 2.1);
+    this.lamp.material.color.copy(PALETTE.amber).multiplyScalar(2.2 * breathe + 3 * this.#lampFlash);
+    this.crescent.material.color.copy(PALETTE.amber).multiplyScalar(2.4 * breathe);
+    this.baseDome.material.color.copy(PALETTE.amber).multiplyScalar(1.6 * breathe);
+
+    if (this.highlight.visible) this.highlight.material.opacity = 0.1 + 0.07 * Math.sin(t * 7);
+    this.#updateNeon(t);
   }
 
   dispose() {
@@ -116,7 +131,6 @@ export class WheelModel {
       materials.forEach((m) => m?.dispose());
     });
     this.faceTexture.dispose();
-    this.pegGeometry.dispose();
   }
 
   // ------------------------------------------------------------------ costruzione
@@ -126,169 +140,223 @@ export class WheelModel {
     this.rotating = rotating;
     this.root.add(rotating);
 
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(R, R * 0.97, 0.4, 96, 1),
-      vinylMaterial({ color: PALETTE.walnut, roughness: 0.75 }),
+    // disco di fondo (si vede solo di taglio)
+    const back = new THREE.Mesh(
+      new THREE.CylinderGeometry(FACE_RADIUS, FACE_RADIUS, 0.3, 96, 1),
+      vinylMaterial({ color: PALETTE.navyDark, roughness: 0.8 }),
     );
-    body.rotation.x = Math.PI / 2;
-    body.position.z = -0.2;
-    rotating.add(body);
+    back.rotation.x = Math.PI / 2;
+    back.position.z = -0.15;
+    rotating.add(back);
 
     this.faceCanvas = document.createElement('canvas');
     this.faceTexture = new THREE.CanvasTexture(this.faceCanvas);
     this.faceTexture.colorSpace = THREE.SRGBColorSpace;
     this.faceTexture.anisotropy = anisotropy;
     const face = new THREE.Mesh(
-      new THREE.CircleGeometry(R, 128),
+      new THREE.CircleGeometry(FACE_RADIUS, 128),
       vinylMaterial({
         map: this.faceTexture,
-        // un filo di emissione: i colori restano leggibili anche fuori dal fascio di luce
+        // un filo di emissione: oro e scritte restano leggibili anche nella penombra
         emissive: 0xffffff,
         emissiveMap: this.faceTexture,
-        emissiveIntensity: 0.13,
+        emissiveIntensity: 0.16,
         roughness: 0.82,
-        rimStrength: 0.15,
+        rimStrength: 0.1,
       }),
     );
     face.position.z = 0.001;
     rotating.add(face);
 
     this.highlight = new THREE.Mesh(
-      new THREE.CircleGeometry(R, 8, 0, 0.1),
-      new THREE.MeshBasicMaterial({ color: 0xfff1d0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
+      new THREE.CircleGeometry(FACE_RADIUS, 8, 0, 0.1),
+      new THREE.MeshBasicMaterial({ color: 0xffc070, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
     );
     this.highlight.position.z = 0.01;
     this.highlight.visible = false;
     rotating.add(this.highlight);
 
-    this.pegMaterial = vinylMaterial({ color: PALETTE.brass, roughness: 0.45 });
-    this.pegGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.22, 12);
-    this.pegGeometry.rotateX(Math.PI / 2);
+    this.goldMaterial = vinylMaterial({ color: PALETTE.gold, roughness: 0.5, rimStrength: 1.1 });
 
-    // Mozzo a forma di tappo a corona (pub!): bordo zigrinato
-    const capGeo = new THREE.CylinderGeometry(0.55, 0.55, 0.22, 42, 1);
-    const pos = capGeo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i);
-      const z = pos.getZ(i);
-      const rr = Math.hypot(x, z);
-      if (rr > 0.5) {
-        const a = Math.atan2(z, x);
-        const crimp = 1 + 0.07 * Math.cos(a * 21);
-        pos.setX(i, x * crimp);
-        pos.setZ(i, z * crimp);
-      }
-    }
-    capGeo.computeVertexNormals();
-    const cap = new THREE.Mesh(capGeo, vinylMaterial({ color: PALETTE.brass, roughness: 0.5 }));
-    cap.rotation.x = Math.PI / 2;
-    cap.position.z = 0.12;
-    rotating.add(cap);
-    const capTop = new THREE.Mesh(
-      new THREE.CircleGeometry(0.4, 48),
-      vinylMaterial({ color: PALETTE.ruby, roughness: 0.6, emissive: PALETTE.ruby, emissiveIntensity: 0.25 }),
-    );
-    capTop.position.z = 0.235;
-    rotating.add(capTop);
+    // Mozzo: base cilindrica + cupola blu notte, con la mezzaluna ambra della reference
+    const navy = vinylMaterial({ color: PALETTE.navy, roughness: 0.62, rimStrength: 0.8 });
+    const hubBase = new THREE.Mesh(new THREE.CylinderGeometry(0.66, 0.7, 0.16, 48), navy);
+    hubBase.rotation.x = Math.PI / 2;
+    hubBase.position.z = 0.08;
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(0.56, 48, 24, 0, TAU, 0, Math.PI / 2), navy);
+    dome.rotation.x = Math.PI / 2;
+    dome.scale.set(1, 0.62, 1);
+    dome.position.z = 0.15;
+    this.crescent = new THREE.Mesh(new THREE.TorusGeometry(0.43, 0.035, 10, 48, Math.PI * 0.9), new THREE.MeshBasicMaterial({ color: PALETTE.amber.clone() }));
+    this.crescent.rotation.z = -Math.PI * 0.45;
+    this.crescent.position.z = 0.33;
+    rotating.add(hubBase, dome, this.crescent);
   }
 
   #buildFrame() {
+    // bordo spesso e tondeggiante (torus "ciccione" da toy)
     const rim = new THREE.Mesh(
-      new THREE.TorusGeometry(R + 0.13, 0.18, 20, 160),
-      vinylMaterial({ color: PALETTE.matteBlack, roughness: 0.72, rimStrength: 1.4, rimPower: 2.0 }),
+      new THREE.TorusGeometry(R * 0.97, R * 0.12, 28, 160),
+      vinylMaterial({ color: PALETTE.navy, roughness: 0.66, rimStrength: 0.9, rimPower: 2.4 }),
     );
-    rim.position.z = 0.02;
+    rim.scale.z = 0.85;
     this.root.add(rim);
 
-    const brassRing = new THREE.Mesh(
-      new THREE.TorusGeometry(R + 0.01, 0.035, 10, 160),
-      vinylMaterial({ color: PALETTE.brass, roughness: 0.4 }),
-    );
-    brassRing.position.z = 0.08;
-    this.root.add(brassRing);
-
-    // Tubo al neon dietro la cornice: colore > 1 = HDR, così il bloom lo fa "accendere"
-    this.neon = new THREE.Mesh(
-      new THREE.TorusGeometry(R + 0.52, 0.04, 12, 200),
-      new THREE.MeshBasicMaterial({ color: PALETTE.neon.clone().multiplyScalar(2.2) }),
-    );
-    this.neon.position.z = -0.12;
-    this.root.add(this.neon);
-
-    // Lampadine "marquee" ambra sulla cornice
-    const bulbs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.07, 14, 10), new THREE.MeshBasicMaterial({ color: 0xffffff }), BULB_COUNT);
-    const m = new THREE.Matrix4();
-    for (let i = 0; i < BULB_COUNT; i++) {
-      const a = (i / BULB_COUNT) * TAU;
-      m.makeTranslation(Math.cos(a) * (R + 0.13), Math.sin(a) * (R + 0.13), 0.2);
-      bulbs.setMatrixAt(i, m);
-      bulbs.setColorAt(i, PALETTE.bulb);
-    }
-    this.bulbs = bulbs;
-    this.root.add(bulbs);
+    // anello oro sul fronte del bordo
+    const goldRing = new THREE.Mesh(new THREE.TorusGeometry(GOLD_RING_R, 0.075, 14, 160), this.goldMaterial);
+    goldRing.scale.z = 0.6;
+    goldRing.position.z = 0.17;
+    this.root.add(goldRing);
   }
 
   #buildPointer() {
-    // Goccia rivolta verso il basso, imperniata in alto
+    const navy = vinylMaterial({ color: PALETTE.navy, roughness: 0.6, rimStrength: 0.9 });
+    // alloggiamento sopra la ruota (fisso al bordo)
+    const housing = new THREE.Mesh(new RoundedBoxGeometry(1.0, 0.62, 0.9, 4, 0.2), navy);
+    housing.position.set(0, R * 1.08, -0.05);
+    this.root.add(housing);
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.2, 24), this.goldMaterial);
+    collar.rotation.x = Math.PI / 2;
+    collar.position.set(0, R * 1.1, 0.45);
+    this.root.add(collar);
+
+    // puntatore a goccia, imperniato sotto la lampada
     const shape = new THREE.Shape();
-    shape.moveTo(0, -0.9);
-    shape.bezierCurveTo(0.1, -0.58, 0.34, -0.25, 0.33, 0.02);
-    shape.absarc(0, 0.02, 0.33, 0, Math.PI, false);
-    shape.bezierCurveTo(-0.34, -0.25, -0.1, -0.58, 0, -0.9);
-    const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.16, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.045, bevelSegments: 4 });
-    geo.translate(0, 0, -0.08);
-    const body = new THREE.Mesh(geo, vinylMaterial({ color: PALETTE.cream, roughness: 0.6, rimStrength: 1.3 }));
-    const gem = new THREE.Mesh(
-      new THREE.SphereGeometry(0.13, 24, 16),
-      vinylMaterial({ color: PALETTE.ruby, roughness: 0.35, emissive: PALETTE.ruby, emissiveIntensity: 0.6 }),
-    );
-    gem.position.set(0, 0.02, 0.15);
+    shape.moveTo(0, -0.62);
+    shape.bezierCurveTo(0.08, -0.4, 0.24, -0.18, 0.23, 0.02);
+    shape.absarc(0, 0.02, 0.23, 0, Math.PI, false);
+    shape.bezierCurveTo(-0.24, -0.18, -0.08, -0.4, 0, -0.62);
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.14, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.045, bevelSegments: 4 });
+    geo.translate(0, 0, -0.07);
+    const drop = new THREE.Mesh(geo, navy);
+
+    // lampada ambra (HDR: con il bloom "brilla" come nella reference)
+    this.lamp = new THREE.Mesh(new THREE.SphereGeometry(0.17, 28, 18), new THREE.MeshBasicMaterial({ color: PALETTE.amber.clone() }));
+    this.lamp.position.set(0, 0.02, 0.13);
+
     this.pointerPivot = new THREE.Group();
-    this.pointerPivot.position.set(0, R + 0.4, 0.42);
-    this.pointerPivot.add(body, gem);
+    this.pointerPivot.position.set(0, R * 1.1, 0.5);
+    this.pointerPivot.add(drop, this.lamp);
     this.root.add(this.pointerPivot);
   }
 
-  #buildPegs(count) {
-    if (this.pegs) {
-      this.rotating.remove(this.pegs);
-      this.pegs.dispose();
+  #buildStand() {
+    const navy = vinylMaterial({ color: PALETTE.navy, roughness: 0.64, rimStrength: 0.8 });
+    const navyDark = vinylMaterial({ color: PALETTE.navyDark, roughness: 0.7, rimStrength: 0.9 });
+    const floor = STAND_FLOOR_Y;
+
+    // colonna trapezoidale dietro la ruota
+    const shape = new THREE.Shape();
+    shape.moveTo(-1.25, 0);
+    shape.lineTo(1.25, 0);
+    shape.lineTo(0.75, 2.6);
+    shape.lineTo(-0.75, 2.6);
+    shape.closePath();
+    const columnGeo = new THREE.ExtrudeGeometry(shape, { depth: 0.8, bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.12, bevelSegments: 4 });
+    columnGeo.translate(0, 0, -0.4);
+    const column = new THREE.Mesh(columnGeo, navy);
+    column.position.set(0, floor + 0.42, -0.55);
+    this.root.add(column);
+
+    // pannello frontale con cornice oro e luce a mezza cupola
+    const panel = new THREE.Mesh(new RoundedBoxGeometry(1.9, 0.62, 0.08, 2, 0.03), navyDark);
+    panel.position.set(0, floor + 0.76, -0.12);
+    const frame = new THREE.Mesh(new RoundedBoxGeometry(2.0, 0.72, 0.05, 2, 0.03), this.goldMaterial);
+    frame.position.set(0, floor + 0.76, -0.16);
+    // mezza cupola luminosa appoggiata sul basamento, davanti al pannello
+    this.baseDome = new THREE.Mesh(new THREE.SphereGeometry(0.24, 32, 12, 0, TAU, 0, Math.PI / 2), new THREE.MeshBasicMaterial({ color: PALETTE.amber.clone() }));
+    this.baseDome.scale.z = 0.6;
+    this.baseDome.position.set(0, floor + 0.42, 0.2);
+    this.root.add(panel, frame, this.baseDome);
+
+    // tre LED sul fronte del basamento, a destra (equalizzatore durante lo spin)
+    this.leds = new THREE.InstancedMesh(new RoundedBoxGeometry(0.2, 0.05, 0.05, 1, 0.02), new THREE.MeshBasicMaterial({ color: 0xffffff }), 3);
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < 3; i++) {
+      m.makeTranslation(1.55, floor + 0.1 + i * 0.11, 0.81);
+      this.leds.setMatrixAt(i, m);
+      this.leds.setColorAt(i, PALETTE.amber);
     }
-    const pegs = new THREE.InstancedMesh(this.pegGeometry, this.pegMaterial, count);
+    this.root.add(this.leds);
+
+    // basamento arrotondato con filetto oro
+    const base = new THREE.Mesh(new RoundedBoxGeometry(4.4, 0.42, 2.3, 4, 0.16), navy);
+    base.position.set(0, floor + 0.21, -0.35);
+    const trim = new THREE.Mesh(new RoundedBoxGeometry(4.46, 0.035, 2.36, 2, 0.015), this.goldMaterial);
+    trim.position.set(0, floor + 0.13, -0.35);
+    this.root.add(base, trim);
+  }
+
+  /** Borchie oro sui confini degli spicchi: sono anche i pioli contro cui sbatte il puntatore. */
+  #buildStuds(count) {
+    if (this.studs) {
+      this.rotating.remove(this.studs);
+      this.studs.dispose();
+    }
+    const studs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.11, 20, 14), this.goldMaterial, count);
     const m = new THREE.Matrix4();
     const s = TAU / count;
     for (let i = 0; i < count; i++) {
       const a = Math.PI / 2 + i * s; // confine dello spicchio i (da +X)
-      m.makeTranslation(Math.cos(a) * R * 0.935, Math.sin(a) * R * 0.935, 0.11);
-      pegs.setMatrixAt(i, m);
+      m.makeTranslation(Math.cos(a) * GOLD_RING_R, Math.sin(a) * GOLD_RING_R, 0.24);
+      studs.setMatrixAt(i, m);
     }
-    pegs.castShadow = true;
-    pegs.receiveShadow = true;
-    this.pegs = pegs;
-    this.rotating.add(pegs);
+    studs.castShadow = true;
+    studs.receiveShadow = true;
+    // ruotano con la ruota: dentro il gruppo rotante, davanti all'anello fisso
+    this.studs = studs;
+    this.rotating.add(studs);
   }
 
-  #updateBulbs(t) {
-    const { mode, color, since } = this.#lights;
-    const c = this.#tmpColor;
-    for (let i = 0; i < BULB_COUNT; i++) {
-      let k;
-      if (mode === 'spin') {
-        // inseguimento: una "onda" di luce che corre in senso orario
-        k = (Math.sin(i * 0.7 + t * 18) + 1) / 2;
-        c.copy(PALETTE.bulb).multiplyScalar(0.25 + 2.6 * k ** 3);
-      } else if (mode === 'win') {
-        // lampeggio alternato nel colore dello spicchio vincente
-        const on = (Math.floor((t - since) * 5) + i) % 2 === 0;
-        c.copy(color).multiplyScalar(on ? 2.4 : 0.25);
-      } else {
-        // idle: lampadine accese calde con un leggero sfarfallio da filamento
-        k = 0.85 + 0.15 * Math.sin(t * 1.7 + i * 2.3);
-        c.copy(PALETTE.bulb).multiplyScalar(1.5 * k);
-      }
-      this.bulbs.setColorAt(i, c);
+  /** Filo neon ambra: un arco per spicchio (un solo draw call), così possiamo animarli uno a uno. */
+  #buildNeonArcs(count) {
+    if (this.neonArcs) {
+      this.rotating.remove(this.neonArcs);
+      this.neonArcs.geometry.dispose();
+      this.neonArcs.dispose();
     }
-    this.bulbs.instanceColor.needsUpdate = true;
+    const s = TAU / count;
+    const arc = new THREE.TorusGeometry(NEON_R, 0.03, 8, 24, s * 0.86);
+    const arcs = new THREE.InstancedMesh(arc, new THREE.MeshBasicMaterial({ color: 0xffffff }), count);
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < count; i++) {
+      m.makeRotationZ(Math.PI / 2 + i * s + s * 0.07);
+      m.setPosition(0, 0, 0.05);
+      arcs.setMatrixAt(i, m);
+      arcs.setColorAt(i, PALETTE.amber);
+    }
+    arcs.castShadow = false;
+    this.neonArcs = arcs;
+    this.rotating.add(arcs);
+  }
+
+  #updateNeon(t) {
+    if (!this.neonArcs) return;
+    const { mode, color, since } = this.#lights;
+    const n = this.neonArcs.count;
+    const c = this.#tmpColor;
+    for (let i = 0; i < n; i++) {
+      if (mode === 'spin') {
+        // onda di luce che rincorre gli spicchi
+        const k = (Math.sin(i * 1.1 + t * 16) + 1) / 2;
+        c.copy(PALETTE.amber).multiplyScalar(0.4 + 3.2 * k ** 3);
+      } else if (mode === 'win') {
+        const winner = i === this.highlightIndex;
+        const on = Math.floor((t - since) * 6) % 2 === 0;
+        c.copy(winner ? color : PALETTE.amber).multiplyScalar(winner ? (on ? 4 : 1.2) : 0.5);
+      } else {
+        c.copy(PALETTE.amber).multiplyScalar(1.7 + 0.25 * Math.sin(t * 1.6 + i * 0.8));
+      }
+      this.neonArcs.setColorAt(i, c);
+    }
+    this.neonArcs.instanceColor.needsUpdate = true;
+
+    // LED del piedistallo: equalizzatore durante lo spin, fissi altrimenti
+    for (let i = 0; i < 3; i++) {
+      const level = mode === 'spin' ? (Math.sin(t * (9 + i * 3) + i) + 1) / 2 : 0.8;
+      c.copy(PALETTE.amber).multiplyScalar(0.3 + 2.4 * level);
+      this.leds.setColorAt(i, c);
+    }
+    this.leds.instanceColor.needsUpdate = true;
   }
 }
-
