@@ -121,6 +121,26 @@ Con un passo di Eulero dentro `requestAnimationFrame`, una TV a 60 Hz e un telef
 - Un aggiornamento non viene attivato a metà partita: la home mostra "Aggiorna".
 - Lo schermo resta acceso con la Wake Lock API. Su Android, nel browser, si passa a schermo intero al primo tap.
 
+### Database Trivia (`src/data/questions/`)
+
+Ci sono **361 domande** in italiano su 7 categorie, a difficoltà media/alta da pub quiz, pensate per ventenni. Le categorie pop (sport, musica, cinema e serie, internet/gaming/tech) parlano solo del periodo **dal 2012 a oggi**. Storia, geografia, arte e letteratura spaziano su qualsiasi epoca.
+
+| File | Categoria | Domande |
+| --- | --- | --- |
+| `sport.ts` | Calcio, tennis, F1, atletica, NBA, moto | 52 |
+| `musica.ts` | Sanremo, rap/urban italiano, tormentoni, pop internazionale | 50 |
+| `storia.ts` | Battaglie, personaggi, date, curiosità | 52 |
+| `geografia.ts` | Capitali infide, confini, fiumi, bandiere, record | 52 |
+| `arte_letteratura.ts` | Opere, musei, correnti, romanzi, autori | 52 |
+| `cinema_serie.ts` | Oscar, registi, serie cult, cinema italiano | 51 |
+| `pop_tech.ts` | Videogiochi, meme, social, streamer, tech, IA | 52 |
+
+- **Doppio formato:** ogni domanda ha `answer`, 3 `wrongAnswers` plausibili per `TRIVIA_CHOICE` (mescolati da `toChoiceRound`) e `acceptedAnswers` per `TRIVIA_OPEN` (cognome, grafie senza accenti, numeri in lettere).
+- **Risposta aperta** (`checkOpenAnswer`): tollera maiuscole, accenti, punteggiatura, articoli e qualche refuso in proporzione alla lunghezza. Numeri e numeri romani devono coincidere esattamente, e una risposta vicina a un distrattore viene rifiutata (es. «Roman Roy» non vale per «Logan Roy»).
+- **Niente ripetizioni:** `getUsedQuestionsTracker({ rng })` va creato a inizio partita e non ripesca mai una domanda già uscita. Si può filtrare per categoria o difficoltà, e ha `usedIds()` e `markUsed()` per salvare e riprendere una partita.
+- **Controllo qualità:** `pnpm validate:questions` verifica id e testi univoci, opzioni distinte, che il fuzzy accetti tutte le varianti e non accetti mai un distrattore, e casi reali di battitura. Gira anche nella CI prima del deploy, insieme a `pnpm typecheck`.
+- **Per aggiungere domande:** si aggiungono **in fondo** all'array del file di categoria, così gli id già esistenti non cambiano.
+
 ### Look "vinyl toy" e luci
 
 - **Materiali** (`shared/stage/vinyl.js`): MeshStandardMaterial con metalness 0 e roughness alta, più una luce di taglio ambra calcolata nello shader (Fresnel) che accende sempre le sagome dal lato della luce.
