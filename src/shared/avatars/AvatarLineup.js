@@ -1,19 +1,34 @@
 import * as THREE from 'three';
-import { BeerAvatar } from './BeerAvatar.js';
+import { BeerAvatarBuilder } from '../../three/BeerAvatarBuilder.ts';
 import { PHASE } from '../protocol.js';
 
 /** Fasi in cui chi è di turno saltella e sbraccia («tocca a me!»). */
 const TURN_READY_PHASES = new Set([PHASE.SHOP, PHASE.BETTING, PHASE.AWAIT_SPIN]);
+/** Fasi in cui il giocatore di turno sta sulla Pedana di Lancio. */
+const PAD_PHASES = new Set([PHASE.SHOP, PHASE.BETTING, PHASE.AWAIT_SPIN, PHASE.SPINNING, PHASE.LANDING, PHASE.CHOICE, PHASE.EVENT, PHASE.TURN_RESULT]);
 
 const LABEL_FONT = '"Oswald", "Arial Narrow", system-ui, sans-serif';
 const TAU = Math.PI * 2;
+const DEG = Math.PI / 180;
 
-/** Quanto spazio lasciare libero attorno al piedistallo della ruota (x). */
-const WHEEL_CLEAR_X = 2.85;
-const SIDE_SPACING = 1.1;
-const SIDE_SCALE = 1.15; // ai lati c'è spazio: birre grandi, protagoniste come nella reference
-const SIDE_ROWS_Z = [1.75, 0.6]; // prima fila (davanti), seconda fila
-const FRONT_SPACING = 0.95;
+/**
+ * Anfiteatro: le birre stanno su archi concentrici davanti alla ruota, centrati in ARC_CENTER.
+ *  - fino a 6 giocatori: un arco (R 3.2) da -70° a +70°
+ *  - oltre: due archi sfalsati (R1 3.2 dietro, R2 4.1 davanti)
+ * La finestra centrale -18°..+18° resta libera: lì si vede il piedistallo della ruota.
+ */
+const ARC_CENTER_Z = 0.8;
+const ARC_R1 = 3.2;
+const ARC_R2 = 4.1;
+const ARC_MAX = 70 * DEG;
+const ARC_WINDOW = 18 * DEG;
+const BEER_SWAP_MS = 350;
+
+/**
+ * Posizione (x, z) della Pedana di Lancio sul bancone: al centro, nella finestra libera
+ * dell'anfiteatro davanti al piedistallo (così non si sovrappone mai ai posti a sedere).
+ */
+export const LAUNCH_PAD = Object.freeze({ x: 0, z: 3.7 });
 
 /**
  * Repertorio di azioni "da toy" che i bicchieri fanno da soli quando sono in attesa.
@@ -27,6 +42,14 @@ function elasticOut(x) {
   return 2 ** (-10 * x) * Math.sin(((x * 10 - 0.75) * TAU) / 3) + 1;
 }
 
+/** Ease "backOut": supera leggermente il valore finale e torna indietro (effetto molla). */
+function backOut(x) {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  const k = Math.min(1, Math.max(0, x)) - 1;
+  return 1 + c3 * k ** 3 + c1 * k ** 2;
+}
+
 /** Inviluppo morbido 0→1→0 per entrare e uscire da un'azione senza scatti. */
 function envelope(k, edge = 0.18) {
   if (k <= 0 || k >= 1) return 0;
@@ -36,48 +59,110 @@ function envelope(k, edge = 0.18) {
 const damp = (current, target, rate, dt) => current + (target - current) * (1 - Math.exp(-rate * dt));
 
 /**
+ * Angoli (da +Z) per n posti su un arco, saltando la finestra centrale e alternando destra/sinistra.
+ * `stagger`: posti a metà tra quelli dell'arco "pieno" (seconda fila sfalsata, non coperta dalla prima).
+ */
+function arcAngles(n, stagger = false) {
+  if (n <= 0) return [];
+  const span = ARC_MAX - ARC_WINDOW;
+  const right = Math.ceil(n / 2);
+  const left = n - right;
+  const side = (count, sign) =>
+    Array.from({ length: count }, (_, i) => {
+      let k;
+      if (stagger) k = (i + 0.5) / count;
+      else k = count === 1 ? 0.4 : i / (count - 1);
+      return sign * (ARC_WINDOW + span * k);
+    });
+  const r = side(right, 1);
+  const l = side(left, -1);
+  const out = [];
+  for (let i = 0; i < Math.max(r.length, l.length); i++) {
+    if (i < r.length) out.push(r[i]);
+    if (i < l.length) out.push(l[i]);
+  }
+  return out;
+}
+
+/**
+ * Punto dell'anfiteatro all'angolo `ang` sull'arco di raggio `r`.
+ * `stretch` allarga l'arco in x sugli schermi larghi (TV) e lo stringe sui telefoni.
+ */
+export function arcPoint(ang, r, stretch = 1) {
+  return {
+    x: Math.sin(ang) * r * stretch,
+    z: ARC_CENTER_Z + Math.cos(ang) * r * (0.75 + 0.25 * Math.min(1, stretch)),
+    pad: false,
+  };
+}
+
+/**
  * Le birre-avatar sul bancone, vive.
  *
- * DISPOSIZIONE
- *  - schermi larghi (TV): sedute ai due lati della ruota, su due file sfalsate
- *  - schermi stretti (telefoni in Pocket): in fila davanti al piedistallo
+ * DISPOSIZIONE ad anfiteatro davanti alla ruota (vedi arcAngles), rivolte verso la camera.
+ * Il giocatore di turno cammina sulla Pedana di Lancio, illuminata da un occhio di bue.
  *
  * COMPORTAMENTI (cosa fanno, in ordine di priorità)
  *  - disconnesso:      bicchiere vuoto, accasciato, braccia a penzoloni
  *  - esultanza:        salto con giravolta e braccia al cielo (vince monete)
- *  - spin in corso:    si girano verso la ruota, tifano a braccia alzate, calciano veloci,
+ *  - spin in corso:    si girano verso la ruota, tifano a braccia alzate, saltellano,
  *                      fanno un "sobbalzo" a ogni scatto del puntatore
  *  - risultato:        applaudono
- *  - è il suo turno:   saltella e sbraccia ("tocca a me!")
- *  - attesa:           dondolano le gambe, respirano, sbattono le palpebre e ogni tanto fanno
- *                      un'azione a caso: saluto, calcio, mani sui fianchi, guardano la ruota,
- *                      saltello, brindisi, bollicine, dondolio
+ *  - è il suo turno:   saltella e sbraccia ("tocca a me!") dalla pedana, braccia al doppio della velocità
+ *  - attesa:           respirano (squash & stretch), dondolano, sbattono le palpebre, bollicine nel
+ *                      bicchiere e ogni tanto un'azione a caso: saluto, calcio, mani sui fianchi,
+ *                      guardano la ruota, saltello, brindisi, ruttino, ballo
+ *  - emote:            salto balistico + fumetto (gestiti da JuiceDirector)
+ * Segni sul bicchiere: 🎯 TAGLIA ATTIVA (cartellino sopra la testa), bagnato (grigio con gocce).
  */
 export class AvatarLineup {
   root = new THREE.Group();
   #entries = new Map();
   #order = [];
-  #halfWidth = 6;
+  #arcScale = 1;
   #phase = PHASE.LOBBY;
   #phaseSince = 0;
   #lastTick = -10;
   #ringGeo = new THREE.RingGeometry(0.42, 0.52, 48).rotateX(-Math.PI / 2);
   #softTexture = makeSoftTexture();
   #contactGeo = new THREE.PlaneGeometry(1.2, 1.2).rotateX(-Math.PI / 2);
+  #bountyTexture = makeBountyTexture();
   #bubbles;
+  #juice;
+  #cameraPos = new THREE.Vector3(0, 2, 30);
+  #padOwner = null;
 
-  constructor({ surfaceY, frontZ }) {
+  /**
+   * @param {{ surfaceY: number, juice: import('../../three/JuiceDirector.ts').JuiceDirector }} opts
+   */
+  constructor({ surfaceY, juice }) {
     this.surfaceY = surfaceY;
-    this.frontZ = frontZ;
+    this.#juice = juice;
     this.#bubbles = new BubbleSystem(this.#softTexture);
     this.root.add(this.#bubbles.points);
   }
 
-  /** Mezza larghezza visibile (unità mondo) all'altezza delle birre: decide la disposizione. */
-  setVisibleHalfWidth(halfWidth) {
-    if (Math.abs(halfWidth - this.#halfWidth) < 0.01) return;
-    this.#halfWidth = halfWidth;
+  get softTexture() {
+    return this.#softTexture;
+  }
+
+  /** Fattore di scala dell'anfiteatro (schermi stretti → archi più raccolti). */
+  setArcScale(scale) {
+    if (Math.abs(scale - this.#arcScale) < 0.01) return;
+    this.#arcScale = scale;
     this.#layout();
+  }
+
+  /** Posizione della camera: le birre si voltano verso chi guarda. */
+  setCameraPosition(position) {
+    this.#cameraPos.copy(position);
+  }
+
+  /** Estensione (x, z) massima dei posti attuali, per inquadrarli tutti. */
+  extents() {
+    const pts = [];
+    for (const entry of this.#entries.values()) pts.push({ x: entry.target.x, z: entry.target.z, s: entry.scale, h: entry.avatar.height });
+    return pts;
   }
 
   sync(players, turnPlayerId, phase, now) {
@@ -90,34 +175,37 @@ export class AvatarLineup {
       if (!ids.has(id)) {
         this.root.remove(entry.group, entry.ring, entry.glow, entry.contact);
         this.#disposeEntry(entry);
+        this.#juice.detach(id);
         this.#entries.delete(id);
       }
     }
 
-    for (const player of players) {
+    players.forEach((player, index) => {
       let entry = this.#entries.get(player.id);
       if (!entry) {
-        entry = this.#create(player, now);
+        entry = this.#create(player, index, now);
         this.#entries.set(player.id, entry);
       }
-      if (entry.avatar.beerId !== player.beer) {
-        entry.avatar.setBeer(player.beer);
-        entry.swapAt = now;
-        if (player.beer) this.#bubbles.emit(entry.group.position, 10, entry.avatar.height * entry.scale);
-      }
+      if (entry.avatar.beerId !== (player.beer ?? null)) this.#swapBeer(entry, player, index, now);
       if (entry.name !== player.name || entry.color !== player.color) this.#updateLabel(entry, player);
       entry.connected = player.connected;
       entry.isTurn = player.id === turnPlayerId;
       entry.avatar.setDimmed(!player.connected);
       entry.ring.material.color.set(player.color).multiplyScalar(1.5);
       entry.glow.material.color.set(player.color);
-    }
+      entry.bountyTarget = player.marks?.bounty ? 1 : 0;
+      entry.wetTarget = player.marks?.wet ? 1 : 0;
+    });
 
     const order = players.map((p) => p.id);
-    if (order.join() !== this.#order.join()) {
+    const padOwner = PAD_PHASES.has(phase) ? turnPlayerId : null;
+    if (order.join() !== this.#order.join() || padOwner !== this.#padOwner) {
       this.#order = order;
+      this.#padOwner = padOwner;
       this.#layout();
     }
+    const padEntry = padOwner ? this.#entries.get(padOwner) : null;
+    this.#juice.pad.setOccupied(Boolean(padEntry?.connected), padEntry?.color);
   }
 
   refreshLabels() {
@@ -132,6 +220,20 @@ export class AvatarLineup {
     this.#bubbles.emit(entry.group.position, 26, entry.avatar.height * entry.scale);
   }
 
+  /** Emote di un giocatore: salto, fumetto, schiuma, suono. */
+  emote(playerId, emoteId, now, playSound = true) {
+    const entry = this.#entries.get(playerId);
+    if (!entry) return;
+    this.#juice.emote(playerId, emoteId, () => this.headPosition(playerId), now, playSound);
+  }
+
+  /** Posizione mondo appena sopra la testa (per fumetti e particelle). */
+  headPosition(playerId, target = new THREE.Vector3()) {
+    const entry = this.#entries.get(playerId);
+    if (!entry) return null;
+    return target.set(entry.group.position.x, entry.group.position.y + (entry.avatar.height + 0.12) * entry.scale, entry.group.position.z);
+  }
+
   /** Scatto del puntatore sulla borchia: tutti fanno un piccolo sobbalzo a tempo. */
   tick(now) {
     this.#lastTick = now;
@@ -143,40 +245,54 @@ export class AvatarLineup {
   }
 
   dispose() {
-    for (const entry of this.#entries.values()) this.#disposeEntry(entry);
+    for (const [id, entry] of this.#entries) {
+      this.#disposeEntry(entry);
+      this.#juice.detach(id);
+    }
     this.#entries.clear();
     this.#ringGeo.dispose();
     this.#softTexture.dispose();
     this.#contactGeo.dispose();
+    this.#bountyTexture.dispose();
     this.#bubbles.dispose();
   }
 
   // ------------------------------------------------------------------ animazione
 
   #animate(entry, t, dt) {
-    const { group, avatar } = entry;
-    const side = entry.target.x < -0.01 ? -1 : entry.target.x > 0.01 ? 1 : 0;
+    const { group } = entry;
+    const avatar = entry.avatar;
+    const side = group.position.x < -0.01 ? -1 : group.position.x > 0.01 ? 1 : 0;
     const s = entry.seed;
+    const onPad = entry.target.pad;
+    const juice = entry.juice.update(t, dt, { active: onPad && entry.connected, alive: entry.connected });
+    const ta = entry.juice.armClock + s; // orologio delle braccia (2x sulla pedana)
 
-    // ---- posa di base (seduto, in attesa)
+    // si gira verso la camera (yaw) con un filo di inclinazione verso chi guarda
+    const faceYaw = Math.atan2(this.#cameraPos.x - group.position.x, this.#cameraPos.z - group.position.z);
+
+    // ---- posa di base (in piedi, in attesa)
     const pose = {
       lift: 0,
-      yaw: entry.target.yaw,
+      yaw: faceYaw,
       pitch: 0,
-      roll: Math.sin(t * 1.1 + s) * 0.025,
-      squash: 1 + Math.sin(t * 2 + s) * 0.015,
-      armL: { x: 0, z: -0.2 - Math.sin(t * 1.5 + s) * 0.07 },
-      armR: { x: 0, z: 0.2 + Math.sin(t * 1.5 + s + 1) * 0.07 },
-      legL: -0.12 - 0.12 * (1 + Math.sin(t * 2.3 + s)),
-      legR: -0.12 - 0.12 * (1 + Math.sin(t * 2.3 + s + Math.PI)),
+      roll: 0,
+      squash: 1,
+      armL: { x: 0, z: -0.32 - Math.sin(ta * 1.5) * 0.07 },
+      armR: { x: 0, z: 0.32 + Math.sin(ta * 1.5 + 1) * 0.07 },
+      legL: Math.sin(t * 2.3 + s) * 0.04,
+      legR: Math.sin(t * 2.3 + s + Math.PI) * 0.04,
     };
     const lookAtWheel = () => {
-      pose.yaw = side === 0 ? 0 : -side * 1.0;
-      pose.pitch = -0.16;
+      pose.yaw = faceYaw + (side === 0 ? 0 : -side * 0.75);
+      pose.pitch = -0.2;
     };
 
     const phaseTime = t - this.#phaseSince;
     const celebrating = entry.celebrateAt && t - entry.celebrateAt < 1.6;
+    const dx = entry.target.x - group.position.x;
+    const dz = entry.target.z - group.position.z;
+    const walking = Math.hypot(dx, dz) > 0.06 && t - entry.spawnAt > 0.9;
 
     if (!entry.connected) {
       // "è crollato": accasciato di lato, braccia a penzoloni, gambe ferme
@@ -187,26 +303,37 @@ export class AvatarLineup {
       pose.legL = 0;
       pose.legR = 0;
       pose.squash = 0.97;
+    } else if (walking) {
+      // cammina verso il nuovo posto (es. la pedana): passo alternato e braccia che pendolano
+      const step = Math.sin(t * 13 + s);
+      pose.yaw = Math.atan2(dx, dz) * 0.6 + faceYaw * 0.4;
+      pose.legL = step * 0.55;
+      pose.legR = -step * 0.55;
+      pose.armL = { x: -step * 0.6, z: -0.3 };
+      pose.armR = { x: step * 0.6, z: 0.3 };
+      pose.lift = Math.abs(Math.cos(t * 13 + s)) * 0.07;
+      pose.roll = step * 0.05;
     } else if (celebrating) {
       const k = (t - entry.celebrateAt) / 1.6;
       pose.lift = Math.sin(Math.min(1, k * 1.4) * Math.PI) * 1.0;
       pose.yaw += k < 0.72 ? (k / 0.72) * TAU : 0;
-      pose.armL = { x: -0.2, z: -2.7 + Math.sin(t * 14) * 0.2 };
-      pose.armR = { x: -0.2, z: 2.7 + Math.sin(t * 14 + 1) * 0.2 };
+      pose.armL = { x: -0.2, z: -2.7 + Math.sin(ta * 14) * 0.2 };
+      pose.armR = { x: -0.2, z: 2.7 + Math.sin(ta * 14 + 1) * 0.2 };
       pose.legL = -0.7;
       pose.legR = -0.7;
     } else if (this.#phase === PHASE.SPINNING) {
-      // tifo: guardano la ruota, braccia su, calci veloci
+      // tifo: guardano la ruota, braccia su, saltellano
       lookAtWheel();
       const amp = entry.isTurn ? 2.6 : 1.5;
-      pose.armL = { x: -0.3, z: -amp - Math.sin(t * 13 + s) * 0.25 };
-      pose.armR = { x: -0.3, z: amp + Math.sin(t * 13 + s + 1.3) * 0.25 };
-      pose.legL = -0.2 - 0.3 * (1 + Math.sin(t * 7 + s));
-      pose.legR = -0.2 - 0.3 * (1 + Math.sin(t * 7 + s + Math.PI));
-      pose.lift = entry.isTurn ? Math.abs(Math.sin(t * 5)) * 0.15 : 0;
+      pose.armL = { x: -0.3, z: -amp - Math.sin(ta * 13) * 0.25 };
+      pose.armR = { x: -0.3, z: amp + Math.sin(ta * 13 + 1.3) * 0.25 };
+      const bounce = Math.abs(Math.sin(t * 7 + s));
+      pose.legL = -0.25 * bounce;
+      pose.legR = -0.25 * bounce;
+      pose.lift = (entry.isTurn ? 0.15 : 0.06) * bounce;
     } else if (this.#phase === PHASE.LANDING && phaseTime < 2.6) {
       // applauso
-      const clap = Math.sin(t * 15 + s * 0.3);
+      const clap = Math.sin(ta * 15 + s * 0.3);
       pose.armL = { x: -1.25, z: 0.45 + clap * 0.3 };
       pose.armR = { x: -1.25, z: -0.45 - clap * 0.3 };
       pose.pitch = -0.06;
@@ -215,8 +342,8 @@ export class AvatarLineup {
       const hop = Math.abs(Math.sin(t * 4.4 + s));
       pose.lift = hop * 0.28;
       pose.squash = 1 + (hop - 0.5) * 0.08;
-      pose.armL = { x: -0.2, z: -2.3 - Math.sin(t * 10) * 0.35 };
-      pose.armR = { x: -0.2, z: 2.3 + Math.sin(t * 10 + 1.5) * 0.35 };
+      pose.armL = { x: -0.2, z: -2.3 - Math.sin(ta * 10) * 0.35 };
+      pose.armR = { x: -0.2, z: 2.3 + Math.sin(ta * 10 + 1.5) * 0.35 };
       pose.legL = -0.5 * hop;
       pose.legR = -0.5 * hop;
     } else {
@@ -236,40 +363,52 @@ export class AvatarLineup {
     if (entry.connected) pose.squash *= 1 - 0.06 * nod;
 
     // ---- applica con smorzamento (niente scatti tra un comportamento e l'altro)
-    const limbRate = 16;
+    const limbRate = 16 * juice.armSpeed;
     const bodyRate = 7;
     const [armL, armR] = avatar.arms;
     const [legL, legR] = avatar.legs;
-    if (armL) {
-      armL.rotation.x = damp(armL.rotation.x, pose.armL.x, limbRate, dt);
+    const [restL, restR] = avatar.armRest;
+    if (armL && armR) {
+      armL.rotation.x = damp(armL.rotation.x, pose.armL.x + restL.x, limbRate, dt);
       armL.rotation.z = damp(armL.rotation.z, pose.armL.z, limbRate, dt);
-      armR.rotation.x = damp(armR.rotation.x, pose.armR.x, limbRate, dt);
+      armR.rotation.x = damp(armR.rotation.x, pose.armR.x + restR.x, limbRate, dt);
       armR.rotation.z = damp(armR.rotation.z, pose.armR.z, limbRate, dt);
-      legL.rotation.x = damp(legL.rotation.x, pose.legL, limbRate, dt);
-      legR.rotation.x = damp(legR.rotation.x, pose.legR, limbRate, dt);
+    }
+    if (legL && legR) {
+      legL.rotation.x = damp(legL.rotation.x, pose.legL, 18, dt);
+      legR.rotation.x = damp(legR.rotation.x, pose.legR, 18, dt);
     }
     entry.yaw = celebrating ? pose.yaw : damp(entry.yaw, pose.yaw, bodyRate, dt);
     group.rotation.y = entry.yaw;
     avatar.body.rotation.x = damp(avatar.body.rotation.x, pose.pitch, bodyRate, dt);
-    avatar.body.rotation.z = damp(avatar.body.rotation.z, pose.roll, bodyRate, dt);
+    entry.roll = damp(entry.roll, pose.roll, bodyRate, dt);
+    avatar.body.rotation.z = entry.roll + juice.sway;
     entry.squash = damp(entry.squash, pose.squash, 20, dt);
-    avatar.body.scale.set(1 / Math.sqrt(entry.squash), entry.squash, 1 / Math.sqrt(entry.squash));
+    const sq = entry.squash;
+    avatar.body.scale.set(juice.scaleX / Math.sqrt(sq), juice.scaleY * sq, juice.scaleX / Math.sqrt(sq));
 
-    // palpebre
-    if (t > entry.blinkAt) entry.blinkAt = t + 2.2 + Math.random() * 3.5;
-    const blinking = entry.blinkAt - t > 0 && entry.blinkAt - t < 0.11;
-    avatar.eyes.scale.y = blinking ? 0.12 : 1;
+    // bagnato (Birra Analcolica) e cartellino della taglia
+    entry.wet = damp(entry.wet, entry.wetTarget, 3, dt);
+    avatar.setWet(entry.wet);
+    entry.bounty = damp(entry.bounty, entry.bountyTarget, 6, dt);
+    entry.bountyTag.visible = entry.bounty > 0.02;
+    if (entry.bountyTag.visible) {
+      const k = entry.bounty;
+      entry.bountyTag.scale.set(0.95 * k, 0.32 * k, 1);
+      entry.bountyTag.position.y = entry.labelY + 0.3 + Math.sin(t * 3) * 0.03;
+      entry.bountyTag.material.rotation = Math.sin(t * 2.2) * 0.06;
+    }
 
-    // posizione: scivola al proprio posto, entrata con caduta elastica
-    const follow = 1 - Math.exp(-dt * 5);
-    group.position.x += (entry.target.x - group.position.x) * follow;
-    group.position.z += (entry.target.z - group.position.z) * follow;
+    // posizione: cammina al proprio posto, entrata con caduta elastica
+    const followK = 1 - Math.exp(-dt * (walking ? 2.6 : 5));
+    group.position.x += dx * followK;
+    group.position.z += dz * followK;
     const spawn = elasticOut(sinceSpawn / 0.9);
-    const swap = entry.swapAt ? 1 + 0.22 * Math.sin(Math.min(1, (t - entry.swapAt) / 0.45) * Math.PI) : 1;
-    group.scale.setScalar(entry.scale * Math.max(0.001, spawn) * swap);
+    const swapK = entry.swapAt ? backOut((t - entry.swapAt) / (BEER_SWAP_MS / 1000)) : 1;
+    group.scale.setScalar(entry.scale * Math.max(0.01, spawn) * Math.max(0.01, swapK));
     const fall = (1 - Math.min(1, sinceSpawn / 0.45)) * 2.6;
     entry.lift = damp(entry.lift, pose.lift, 18, dt);
-    group.position.y = this.surfaceY + entry.lift + fall;
+    group.position.y = this.surfaceY + entry.lift + fall + juice.jump;
 
     // anello del turno, alone e ombra di contatto restano appoggiati al bancone
     const showRing = entry.isTurn && entry.connected;
@@ -282,14 +421,17 @@ export class AvatarLineup {
     }
     const x = group.position.x;
     const z = group.position.z;
-    entry.ring.position.set(x, this.surfaceY + 0.012, z);
-    entry.glow.position.set(x, this.surfaceY + 0.01, z);
+    const floorY = this.surfaceY + (onPad && !walking ? 0.085 : 0);
+    entry.ring.position.set(x, floorY + 0.012, z);
+    entry.glow.position.set(x, floorY + 0.01, z);
     entry.ring.scale.setScalar(entry.scale);
     entry.glow.scale.setScalar(entry.scale);
-    const k = 1 / (1 + (entry.lift + fall) * 1.6);
-    entry.contact.position.set(x, this.surfaceY + 0.008, z + 0.12 * entry.scale);
-    entry.contact.scale.setScalar(entry.scale * Math.max(0.001, spawn) * (0.75 + 0.25 * k));
+    const air = entry.lift + fall + juice.jump;
+    const k = 1 / (1 + air * 1.6);
+    entry.contact.position.set(x, floorY + 0.008, z + 0.05 * entry.scale);
+    entry.contact.scale.setScalar(entry.scale * Math.max(0.001, spawn) * (0.6 + 0.2 * k));
     entry.contact.material.opacity = (entry.connected ? 0.75 : 0.4) * k;
+    if (onPad && !walking) group.position.y += 0.085;
   }
 
   /** Azioni casuali in attesa: ognuno ha i suoi tempi, così il bancone sembra vivo. */
@@ -360,60 +502,48 @@ export class AvatarLineup {
     const n = ids.length;
     if (!n) return;
 
-    // posti ai lati della ruota: dall'interno verso l'esterno, prima fila prima, alternando i lati
-    const room = this.#halfWidth - WHEEL_CLEAR_X - 0.3;
-    const cols = room >= 0 ? Math.floor(room / SIDE_SPACING) + 1 : 0;
-    const sideSlots = [];
-    for (let col = 0; col < cols; col++) {
-      SIDE_ROWS_Z.forEach((z, row) => {
-        for (const side of [1, -1]) {
-          const x = side * (WHEEL_CLEAR_X + col * SIDE_SPACING + (row ? SIDE_SPACING * 0.5 : 0));
-          if (Math.abs(x) <= this.#halfWidth - 0.25) sideSlots.push({ x, z, yaw: -side * 0.3, order: col * 4 + row * 2 + (side > 0 ? 0 : 1) });
-        }
-      });
-    }
-    sideSlots.sort((a, b) => a.order - b.order);
-
+    // i posti dipendono dal numero TOTALE di giocatori: chi va sulla pedana lascia il suo posto vuoto
+    const a = this.#arcScale;
     let slots;
-    let scale;
-    if (sideSlots.length >= n) {
-      slots = sideSlots;
-      scale = SIDE_SCALE;
+    if (n <= 6) {
+      slots = arcAngles(n).map((ang) => ({ ang, r: ARC_R1 }));
     } else {
-      // telefoni: in fila davanti al piedistallo, su una o due file
-      const usable = Math.max(FRONT_SPACING, this.#halfWidth * 2 - 0.4);
-      const perRow = Math.max(1, Math.floor(usable / FRONT_SPACING));
-      const rows = n <= perRow ? 1 : 2;
-      const front = rows === 1 ? n : Math.ceil(n / 2);
-      const spacing = Math.min(FRONT_SPACING * (rows === 1 ? 1 : 1.5), usable / front);
-      scale = Math.min(0.85, spacing / FRONT_SPACING);
-      slots = ids.map((_, i) => {
-        const inFront = rows === 1 || i % 2 === 0;
-        const indexInRow = rows === 1 ? i : Math.floor(i / 2);
-        const rowCount = rows === 1 ? n : inFront ? front : n - front;
-        let x = (indexInRow - (rowCount - 1) / 2) * spacing;
-        if (!inFront && rowCount === front) x += spacing / 2;
-        return { x, z: inFront ? this.frontZ : this.frontZ - 0.9, yaw: 0 };
-      });
+      // due file: dietro (R1) i primi, davanti (R2) gli altri, sfalsati per non coprirsi
+      const back = Math.ceil(n / 2);
+      const front = n - back;
+      const backSlots = arcAngles(back).map((ang) => ({ ang, r: ARC_R1 }));
+      const frontSlots = arcAngles(front, true).map((ang) => ({ ang, r: ARC_R2 }));
+      slots = [];
+      for (let i = 0; i < Math.max(back, front); i++) {
+        if (i < backSlots.length) slots.push(backSlots[i]);
+        if (i < frontSlots.length) slots.push(frontSlots[i]);
+      }
     }
+    const scale = (n > 6 ? 0.92 : 1.05) * (0.85 + 0.15 * Math.min(1, a));
+    const positions = slots.map(({ ang, r }) => arcPoint(ang, r, a));
 
-    ids.forEach((id, i) => {
+    ids.forEach((id) => {
       const entry = this.#entries.get(id);
-      entry.target = slots[i];
-      entry.scale = scale;
+      entry.homeIndex = this.#order.indexOf(id);
+    });
+    // il posto "di casa" di ciascuno è fisso (ordine di ingresso), anche quando è sulla pedana
+    for (const id of ids) {
+      const entry = this.#entries.get(id);
+      const home = positions[entry.homeIndex] ?? positions[0];
+      entry.target = id === this.#padOwner ? { x: LAUNCH_PAD.x * Math.min(1, a), z: LAUNCH_PAD.z, pad: true } : home;
+      entry.scale = id === this.#padOwner ? scale * 1.12 : scale;
       if (!entry.placed) {
         entry.placed = true;
-        entry.group.position.x = slots[i].x;
-        entry.group.position.z = slots[i].z;
-        entry.yaw = slots[i].yaw;
+        entry.group.position.x = entry.target.x;
+        entry.group.position.z = entry.target.z;
       }
-    });
+    }
   }
 
   // ------------------------------------------------------------------ creazione
 
-  #create(player, now) {
-    const avatar = new BeerAvatar(player.beer);
+  #create(player, index, now) {
+    const avatar = BeerAvatarBuilder.build(player.beer ?? null);
     const group = new THREE.Group();
     group.add(avatar.root);
 
@@ -422,6 +552,10 @@ export class AvatarLineup {
     labelTexture.colorSpace = THREE.SRGBColorSpace;
     const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture, depthWrite: false, transparent: true }));
     group.add(label);
+
+    const bountyTag = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.#bountyTexture, depthWrite: false, transparent: true }));
+    bountyTag.visible = false;
+    group.add(bountyTag);
 
     const ring = new THREE.Mesh(
       this.#ringGeo,
@@ -442,27 +576,53 @@ export class AvatarLineup {
       group,
       avatar,
       label,
+      labelY: 0,
+      bountyTag,
       ring,
       glow,
       contact,
+      juice: this.#juice.attach(player.id, avatar, index, now),
       seed: Math.random() * 10,
       spawnAt: now,
       swapAt: 0,
       celebrateAt: 0,
       scale: 1,
       squash: 1,
+      roll: 0,
       lift: 0,
       yaw: 0,
-      target: { x: 0, z: this.frontZ, yaw: 0 },
+      wet: 0,
+      wetTarget: 0,
+      bounty: 0,
+      bountyTarget: 0,
+      homeIndex: index,
+      target: { x: 0, z: ARC_CENTER_Z + ARC_R1, pad: false },
       placed: false,
       connected: true,
       isTurn: false,
       action: null,
       nextActionAt: now + 1.5 + Math.random() * 3,
-      blinkAt: now + 1 + Math.random() * 3,
     };
     this.#updateLabel(entry, player);
     return entry;
+  }
+
+  /**
+   * Cambio birra: via le mesh vecchie (geometrie e materiali liberati), entra la nuova
+   * con una scala 0.01 → 1 in 350 ms (backOut) e uno sbuffo di bollicine.
+   */
+  #swapBeer(entry, player, index, now) {
+    const old = entry.avatar;
+    const next = BeerAvatarBuilder.build(player.beer ?? null);
+    entry.group.remove(old.root);
+    old.dispose();
+    entry.group.add(next.root);
+    entry.avatar = next;
+    entry.juice = this.#juice.attach(player.id, next, index, now);
+    entry.wet = -1; // forza la riapplicazione dello stato "bagnato" sul nuovo materiale
+    entry.swapAt = now;
+    if (player.beer) this.#bubbles.emit(entry.group.position, 14, next.height * entry.scale);
+    this.#updateLabel(entry, player);
   }
 
   #updateLabel(entry, player) {
@@ -492,13 +652,17 @@ export class AvatarLineup {
     entry.label.material.map.needsUpdate = true;
     const h = 0.22;
     entry.label.scale.set((h * w) / 70, h, 1);
-    entry.label.position.set(0, entry.avatar.height + 0.32, 0);
+    // badge del nome sopra il bicchiere: altezza del vetro + 0.45
+    entry.labelY = entry.avatar.glassTop + 0.45;
+    entry.label.position.set(0, entry.labelY, 0);
   }
 
   #disposeEntry(entry) {
     entry.avatar.dispose();
+    entry.juice.dispose();
     entry.label.material.map.dispose();
     entry.label.material.dispose();
+    entry.bountyTag.material.dispose();
     entry.ring.material.dispose();
     entry.glow.geometry.dispose();
     entry.glow.material.dispose();
@@ -588,6 +752,29 @@ function makeSoftTexture() {
   g.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 128, 128);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/** Cartellino "🎯 TAGLIA ATTIVA" che fluttua sopra chi ha una taglia sulla testa. */
+function makeBountyTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 384;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(120, 14, 20, 0.92)';
+  ctx.beginPath();
+  ctx.roundRect(6, 10, 372, 108, 26);
+  ctx.fill();
+  ctx.strokeStyle = '#ffd27a';
+  ctx.lineWidth = 6;
+  ctx.stroke();
+  ctx.fillStyle = '#ffe9b8';
+  ctx.font = `700 54px ${LABEL_FONT}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('🎯 TAGLIA', 192, 68);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;

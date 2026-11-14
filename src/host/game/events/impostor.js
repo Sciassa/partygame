@@ -1,3 +1,4 @@
+import { claimBounty } from '../counter.js';
 import { IMPOSTOR_WORDS } from '../../../data/impostor.ts';
 import { cleanText, withEvent } from './common.js';
 
@@ -66,6 +67,9 @@ export async function runImpostor(engine, { lander }) {
         results.push({ playerId: voter, delta: engine.award(p, 40, { reason: 'Impostore', boostable: true }) });
       }
       results.push({ playerId: impostor.id, delta: engine.award(impostor, -30, { reason: 'Impostore scoperto' }) });
+      // Taglia: il primo che ha smascherato l'impostore (facendogli perdere Tappi) la riscuote
+      const firstVoter = [...votes].find(([, target]) => target === impostor.id);
+      if (firstVoter) claimBounty(engine, impostor, engine.state.getPlayer(firstVoter[0]), "l'ha smascherato");
       engine.line(`🕵️ Impostore scoperto: era ${impostor.name}! La parola era «${secret.word}»`, 'bonus');
     } else {
       results.push({ playerId: impostor.id, delta: engine.award(impostor, 120, { reason: 'Impostore', boostable: true }) });

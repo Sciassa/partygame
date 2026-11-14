@@ -9,7 +9,20 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "erasableSyntaxOnly": true
+    "erasableSyntaxOnly": true,
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "allowJs": true,
+    "checkJs": false
   },
-  "include": ["src/data/**/*.ts", "scripts/**/*.ts"]
+  "include": [
+    "src/data/**/*.ts",
+    "src/three/**/*.ts",
+    "src/audio/**/*.ts",
+    "src/host/**/*.ts",
+    "scripts/**/*.ts"
+  ]
 }

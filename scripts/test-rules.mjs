@@ -8,6 +8,10 @@ import { GameEngine } from '../src/host/game/GameEngine.js';
 import * as stickers from '../src/host/game/stickerEngine.js';
 import { computeAwards } from '../src/host/game/awards.js';
 import { segmentLayout, segmentIndexAt, TAU } from '../src/shared/wheel/kinematics.js';
+import { BeerPoolManager } from '../src/host/state/BeerPoolManager.ts';
+import { PHASE } from '../src/shared/protocol.js';
+import { FlapperPhysics } from '../src/three/JuiceDirector.ts';
+import { getRadiusAtY, GLASS_PROFILES, BEER_PROFILE } from '../src/three/BeerAvatarBuilder.ts';
 
 let passed = 0;
 function test(name, fn) {
@@ -198,6 +202,144 @@ await test('Bonus Segreti: Fulmine, Architetto, Bersaglio (con pari merito)', ()
   assert.deepEqual(fulmine.winners, [B.id]);
   assert.deepEqual(architetto.winners.sort(), [A.id, C.id].sort());
   assert.deepEqual(bersaglio.winners, [B.id]);
+});
+
+
+
+console.log('\nBirre, Bancone, emote, fisica del puntatore');
+
+await test('BeerPoolManager: birre uniche, cambio solo verso birre libere, rilascio', () => {
+  const pool = new BeerPoolManager({ pick: () => 0 });
+  const ids = Array.from({ length: 12 }, (_, i) => `p${i}`);
+  const beers = ids.map((id) => pool.assign(id));
+  assert.equal(new Set(beers).size, 12);
+  assert.equal(pool.free.length, 0);
+  assert.throws(() => pool.assign('p99'));
+  assert.equal(pool.request('p0', beers[1]), 'taken');
+  assert.equal(pool.request('p0', beers[0]), 'same');
+  assert.equal(pool.request('p0', 'acqua'), 'invalid');
+  pool.release('p1');
+  assert.deepEqual(pool.free, [beers[1]]);
+  assert.equal(pool.request('p0', beers[1]), 'ok');
+  assert.deepEqual(pool.free, [beers[0]]);
+  assert.ok(pool.check());
+  assert.equal(pool.snapshot().p0, beers[1]);
+});
+
+await test('Cambio birra: permesso in lobby e prima del primo lancio, poi chiuso', () => {
+  const { engine, state, A, B } = setup();
+  assert.ok(engine.canChangeBeer());
+  assert.equal(state.setBeer(A.id, B.beer), 'taken');
+  const free = state.beerPool[0];
+  assert.equal(state.setBeer(A.id, free), 'ok');
+  assert.equal(A.beer, free);
+  engine.phase = PHASE.SHOP;
+  assert.ok(engine.canChangeBeer(), 'in partita ma prima del primo lancio');
+  engine.firstSpinDone = true;
+  assert.equal(engine.canChangeBeer(), false);
+});
+
+await test('Taglia: costa 40, chi fa perdere Tappi al bersaglio con un adesivo incassa 60', async () => {
+  const { engine, A, B, C } = setup();
+  engine.phase = PHASE.SHOP;
+  assert.ok(engine.handleAction(C.id, { kind: 'counter_bounty', targetId: A.id }));
+  assert.equal(C.coins, 60);
+  assert.ok(engine.snapshot().players.find((p) => p.id === A.id).marks.bounty);
+  assert.equal(engine.handleAction(B.id, { kind: 'counter_bounty', targetId: A.id }), false, 'una taglia alla volta');
+  placeAs(engine, B, 'tassa', 0);
+  await stickers.onLand(engine, 0, A);
+  assert.equal(B.coins, 100 + 50 + 60);
+  assert.equal(engine.bounties.size, 0);
+});
+
+await test('Taglia: scade dopo 2 turni', () => {
+  const { engine, A, C } = setup();
+  engine.phase = PHASE.BETTING;
+  engine.handleAction(C.id, { kind: 'counter_bounty', targetId: A.id });
+  engine.bounties.get(A.id).turnsLeft -= 1;
+  assert.equal(engine.bounties.get(A.id).turnsLeft, 1);
+});
+
+await test('Sottobanco: trasferimento segreto, uno per turno, solo a bancone aperto', () => {
+  const { engine, A, B } = setup();
+  const events = [];
+  engine.onEvent = (e) => events.push(e);
+  engine.phase = PHASE.LANDING;
+  assert.equal(engine.handleAction(A.id, { kind: 'counter_slip', targetId: B.id, amount: 20 }), false);
+  engine.phase = PHASE.AWAIT_SPIN;
+  assert.ok(engine.handleAction(A.id, { kind: 'counter_slip', targetId: B.id, amount: 50 }));
+  assert.equal(A.coins, 50);
+  assert.equal(B.coins, 150);
+  assert.equal(engine.handleAction(A.id, { kind: 'counter_slip', targetId: B.id, amount: 20 }), false);
+  assert.equal(engine.handleAction(A.id, { kind: 'counter_slip', targetId: B.id, amount: 33 }), false);
+  assert.ok(events.some((e) => e.type === 'sneaky'));
+});
+
+await test('Shot: uno nel taschino, si usa solo nel proprio turno', () => {
+  const { engine, A, B } = setup();
+  engine.phase = PHASE.SHOP;
+  engine.turnPlayerId = A.id;
+  assert.ok(engine.handleAction(B.id, { kind: 'counter_buy', shot: 'tequila' }));
+  assert.equal(B.coins, 50);
+  assert.equal(engine.handleAction(B.id, { kind: 'counter_buy', shot: 'assenzio' }), false, 'taschino pieno');
+  assert.equal(engine.handleAction(B.id, { kind: 'counter_use' }), false, 'non è il suo turno');
+  assert.ok(engine.handleAction(A.id, { kind: 'counter_buy', shot: 'analcolica' }));
+  assert.ok(engine.handleAction(A.id, { kind: 'counter_use', targetId: B.id }));
+  assert.equal(B.status.wet, true);
+  assert.equal(A.shot, null);
+  engine.event = { kind: 'trivia' };
+  assert.equal(engine.privateFor(B.id).sabotage.foam, true);
+  assert.equal(engine.privateFor(A.id).sabotage.foam, false);
+  engine.dryOff();
+  assert.equal(B.status.wet, false);
+});
+
+await test('Tequila: guadagni dell\'evento x2.5', () => {
+  const { engine, A } = setup();
+  engine.turn.tequila = true;
+  engine.turn.eventWindow = true;
+  engine.turn.tequilaGain = 0;
+  assert.equal(engine.award(A, 40, { reason: 'Trivia' }), 100);
+  assert.equal(engine.turn.tequilaGain, 100);
+});
+
+await test('Assenzio: le trappole dei nemici sono riconosciute come tali', () => {
+  assert.ok(stickers.isTrap('tassa'));
+  assert.ok(stickers.isTrap('blackout'));
+  assert.equal(stickers.isTrap('jackpot'), false);
+});
+
+await test('Emote: cooldown di 2.5 s per giocatore', () => {
+  let now = 0;
+  const { engine, A, B } = setup();
+  engine.now = () => now;
+  assert.ok(engine.emote(A.id, 'cheers'));
+  now = 1000;
+  assert.equal(engine.emote(A.id, 'boo'), false);
+  assert.ok(engine.emote(B.id, 'boo'));
+  now = 2600;
+  assert.ok(engine.emote(A.id, 'fire'));
+  assert.equal(engine.emote(A.id, 'dance'), false);
+});
+
+await test('Puntatore: conta tutti i pioli attraversati e la molla torna a riposo', () => {
+  const f = new FlapperPhysics();
+  const bounds = segmentLayout(12).map((l) => l.start);
+  f.countCrossings(0.1, bounds);
+  assert.equal(f.countCrossings(0.1 + (TAU / 12) * 3, bounds), 3);
+  f.countCrossings(0.1, bounds);
+  assert.equal(f.countCrossings(TAU - 0.1, bounds), 1, 'passaggio per lo 0 (da 0.1 a 2π-0.1 all\'indietro)');
+  f.velocity = 12;
+  for (let i = 0; i < 400; i++) f.update(1 / 60);
+  assert.ok(Math.abs(f.angle) < 1e-3 && Math.abs(f.velocity) < 1e-2);
+});
+
+await test('Bicchieri: profili coerenti e 12 birre mappate su 4 forme', () => {
+  assert.equal(Object.keys(BEER_PROFILE).length, 12);
+  assert.equal(getRadiusAtY('PINT_GLASS', 0.85 / 1.1).toFixed(2), '0.38');
+  assert.equal(getRadiusAtY('WEISS_TALL', 1).toFixed(2), '0.34');
+  assert.ok(Math.abs(getRadiusAtY('TULIP_STEM', 0.2 / 1.04) - 0.07) < 1e-9, 'stelo');
+  for (const p of Object.values(GLASS_PROFILES)) assert.equal(p.points.at(-1)[1], p.height);
 });
 
 console.log(`\n${passed} test superati`);

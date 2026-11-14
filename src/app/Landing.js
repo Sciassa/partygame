@@ -3,7 +3,7 @@ import { APP_NAME, MAX_NAME_LENGTH, ROOM_CODE_LENGTH, normalizeRoomCode } from '
 import { clear, h, toast } from '../shared/util/dom.js';
 import { enterFullscreen, isIOS, isStandalone } from '../shared/util/device.js';
 import { load, save } from '../shared/util/storage.js';
-import { unlockAudio } from '../shared/audio/sfx.js';
+import { SoundEngine } from '../audio/SoundEngine.ts';
 import { canPromptInstall, promptInstall, pwa } from '../pwa/registerSW.js';
 
 /**
@@ -50,7 +50,7 @@ export function renderLanding(root, { roomFromUrl = '' } = {}) {
   };
 
   const startSalotto = async () => {
-    unlockAudio();
+    SoundEngine.unlock();
     const { startSalotto } = await import('../host/screen/HostScreen.js');
     startSalotto(root);
   };
@@ -58,7 +58,7 @@ export function renderLanding(root, { roomFromUrl = '' } = {}) {
   const startPocket = async () => {
     const name = requireName();
     if (!name) return;
-    unlockAudio();
+    SoundEngine.unlock();
     enterFullscreen();
     const { startPocket } = await import('../pocket/startPocket.js');
     startPocket(root, { name });
@@ -73,7 +73,7 @@ export function renderLanding(root, { roomFromUrl = '' } = {}) {
     }
     const name = requireName();
     if (!name) return;
-    unlockAudio();
+    SoundEngine.unlock();
     enterFullscreen();
     const { startRemoteClient } = await import('../client/ClientApp.js');
     startRemoteClient(root, { roomCode: code, name });

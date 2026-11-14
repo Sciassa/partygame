@@ -7,8 +7,10 @@ import { preventZoomGestures } from './shared/util/device.js';
 import { load } from './shared/util/storage.js';
 import { registerServiceWorker } from './pwa/registerSW.js';
 import { renderLanding } from './app/Landing.js';
+import { SoundEngine } from './audio/SoundEngine.ts';
 
 registerServiceWorker();
+SoundEngine.install(); // l'audio si sblocca da solo al primo tocco
 preventZoomGestures();
 
 const root = document.getElementById('app');

@@ -16,7 +16,7 @@ export class StageSync {
   #lastFinishedId = 0;
   #revealTimer = null;
 
-  constructor(stage, { topSlot = null } = {}) {
+  constructor(stage, { topSlot = null, overlayTopSlot: _overlay = true } = {}) {
     this.stage = stage;
     this.topSlot = topSlot;
   }
@@ -72,9 +72,15 @@ export class StageSync {
     });
   }
 
+  /** Emote di un giocatore: salto + fumetto sopra la sua birra (+ suono se `sound`). */
+  emote(playerId, emote, sound = true) {
+    this.stage.emote(playerId, emote, sound);
+  }
+
   /** Eventi istantanei dall'host: esultanze delle birre. */
   handleEvent(e) {
-    if (e.type === 'pint' || e.type === 'top_slot_hit') this.stage.celebrate(e.playerId);
+    if (e.type === 'pint' || e.type === 'top_slot_hit' || e.type === 'bounty_claimed') this.stage.celebrate(e.playerId);
+    if (e.type === 'splash') this.stage.celebrate(e.playerId);
     if (e.type === 'award') for (const id of e.award.winners) this.stage.celebrate(id);
     if (e.type === 'game_over' && e.winnerId) this.stage.celebrate(e.winnerId);
   }

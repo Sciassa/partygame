@@ -1,3 +1,4 @@
+import { claimBounty } from '../counter.js';
 import { CATEGORIES, CATEGORY_IDS, checkOpenAnswer, toChoiceRound } from '../../../data/questions/index.ts';
 import { cleanText, withEvent } from './common.js';
 
@@ -126,6 +127,8 @@ export async function runDuel(engine, { a, b, stake }) {
         const loser = winner.id === a.id ? b : a;
         transferred = -engine.award(loser, -stake, { reason: 'Sfida 1v1', raw: true });
         engine.award(winner, transferred, { reason: 'Sfida 1v1', raw: true });
+        // Taglia: battere il bersaglio in una Sfida 1v1 la fa riscuotere
+        claimBounty(engine, loser, winner, 'lo ha battuto in Sfida');
         engine.line(`⚔️ ${winner.name} vince la Sfida e prende ${transferred} Tappi a ${loser.name}`, 'gold');
       } else {
         engine.line('⚔️ Sfida: nessuno indovina, Tappi salvi', 'info');

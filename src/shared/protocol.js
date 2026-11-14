@@ -1,9 +1,11 @@
 /**
  * Protocollo di rete Host <-> Client.
- * Ogni messaggio è un oggetto JSON con un campo `t` (tipo). L'host è l'unica fonte di verità:
- * i client inviano solo "intenzioni" (es. SPIN_REQUEST) e ricevono lo stato autoritativo.
+ * Ogni messaggio è un oggetto JSON con un campo `t` (tipo). I messaggi nuovi in MAIUSCOLO
+ * (REQUEST_BEER_CHANGE, BEER_POOL_SYNC, PLAYER_EMOTE) portano il tipo anche in `type`.
+ * L'host è l'unica fonte di verità: i client inviano solo "intenzioni" (es. SPIN_REQUEST)
+ * e ricevono lo stato autoritativo.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export const MODE = Object.freeze({
   /** Schermo grande (TV/PC) = host + render 3D; i telefoni sono solo controller. */
@@ -34,7 +36,10 @@ export const MSG = Object.freeze({
   // client -> host
   HELLO: 'hello', // { v, clientId, name }
   SPIN_REQUEST: 'spin:req', // { force: 0..1 } forza del lancio (swipe o tasto)
-  AVATAR_PICK: 'avatar:pick', // { beerId } il giocatore sceglie la sua birra
+  /** { type, peerId, newBeerId } cambio birra (in lobby e prima del primo lancio) */
+  REQUEST_BEER_CHANGE: 'REQUEST_BEER_CHANGE',
+  /** { type, peerId, emote } reazione dal telefono (cooldown 2.5 s); l'host la ritrasmette a tutti */
+  PLAYER_EMOTE: 'PLAYER_EMOTE',
   ACTION: 'action', // { a: { kind, ... } } qualsiasi azione di gioco (scommessa, risposta, acquisto...)
   PONG: 'pong', // { ts }
 
@@ -47,7 +52,16 @@ export const MSG = Object.freeze({
   PRIVATE: 'private', // { p } dati riservati al singolo giocatore (parola dell'impostore, negozio...)
   PING: 'ping', // { ts }
   TOAST: 'toast', // { text }
+  /** { type, assigned: { peerId: beerId }, free: beerId[] } pool delle birre dopo ogni modifica */
+  BEER_POOL_SYNC: 'BEER_POOL_SYNC',
 });
+
+/** Costruttori dei messaggi "tipizzati" (campo `t` per il router, `type` per leggibilità/debug). */
+export const message = {
+  requestBeerChange: (peerId, newBeerId) => ({ t: MSG.REQUEST_BEER_CHANGE, type: MSG.REQUEST_BEER_CHANGE, peerId, newBeerId }),
+  beerPoolSync: (assigned, free) => ({ t: MSG.BEER_POOL_SYNC, type: MSG.BEER_POOL_SYNC, assigned, free }),
+  playerEmote: (peerId, emote) => ({ t: MSG.PLAYER_EMOTE, type: MSG.PLAYER_EMOTE, peerId, emote }),
+};
 
 export const REJECT_REASON = Object.freeze({
   ROOM_FULL: 'room_full',

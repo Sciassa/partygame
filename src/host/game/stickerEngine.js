@@ -128,8 +128,22 @@ export async function onLand(engine, segmentIndex, lander) {
   const sticker = segment.sticker;
   if (!sticker) return;
   const owner = engine.state.getPlayer(sticker.ownerId);
-  await applyEffect(engine, { id: sticker.id, level: sticker.level, owner, lander, segment });
+  // suono e animazione sui client: arpeggio per i bonus, discesa cupa per le trappole
+  engine.emit({ type: 'sticker_trigger', segmentIndex, stickerId: sticker.id, trap: isTrap(sticker.id) && owner?.id !== lander.id, playerId: lander.id });
+  // chi perde Tappi per colpa di questo adesivo li perde "per mano" del proprietario (taglie)
+  engine.blameId = owner?.id ?? null;
+  try {
+    await applyEffect(engine, { id: sticker.id, level: sticker.level, owner, lander, segment });
+  } finally {
+    engine.blameId = null;
+  }
   if (sticker.id !== 'copia') engine.lastSticker = { id: sticker.id, level: sticker.level, ownerId: sticker.ownerId };
+}
+
+/** Adesivi che danneggiano chi ci capita (l'Assenzio li ignora se sono di un avversario). */
+export function isTrap(stickerId) {
+  const def = getSticker(stickerId);
+  return def.polarity === 'malus' || def.category === 'sabotaggio';
 }
 
 /** Bersaglio di un malus: lo Specchio lo rimbalza sul proprietario dell'adesivo. */
@@ -277,6 +291,7 @@ async function applyEffect(engine, { id, level: lv, owner, lander, segment }) {
       const rival = engine.state.getPlayer(rivalId);
       say(`${lander.name} sfida ${rival.name}!`, 'info');
       await runDuel(engine, { a: lander, b: rival, stake: 100 * lv });
+      engine.dryOff();
       return;
     }
 

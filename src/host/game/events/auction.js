@@ -1,3 +1,4 @@
+import { claimBounty } from '../counter.js';
 import { withEvent } from './common.js';
 
 const BID_MS = 15000;
@@ -46,6 +47,8 @@ export async function runAuction(engine, { lander }) {
       const loser = engine.state.getPlayer(second[0]);
       engine.spend(loser, Math.min(second[1].amount, loser.coins), 'Asta al Buio (secondo)');
       engine.line(`🔨 ${loser.name} arriva secondo e perde ${second[1].amount} Tappi`, 'malus');
+      // Taglia: battere il bersaglio all'asta (che così perde la puntata) la fa riscuotere
+      if (winner) claimBounty(engine, loser, winner, "l'ha battuto all'Asta");
     }
     Object.assign(event, {
       stage: 'reveal',

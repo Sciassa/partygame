@@ -1,21 +1,49 @@
 import '../styles/client.css';
 import { CONNECTION_TIMEOUT_MS, joinUrl } from '../shared/config.js';
-import { MODE, MSG, PHASE, PROTOCOL_VERSION, REJECT_REASON, rejectMessage } from '../shared/protocol.js';
+import { MODE, MSG, PHASE, PROTOCOL_VERSION, REJECT_REASON, message, rejectMessage } from '../shared/protocol.js';
 import { clear, fill, h, toast } from '../shared/util/dom.js';
 import { keepScreenOn, vibrate } from '../shared/util/device.js';
 import { getClientId, save } from '../shared/util/storage.js';
-import { sfx } from '../shared/audio/sfx.js';
+import { SoundEngine } from '../audio/SoundEngine.ts';
 import { getBeer } from '../shared/avatars/beers.js';
 import { beerIcon } from '../shared/ui/beerIcon.js';
 import { createTopSlot } from '../shared/ui/topSlot.js';
 import { phaseLabel, topSlotRevealMs } from '../shared/game/display.js';
 import { openBeerPicker } from './ui/BeerPicker.js';
 import { panelFor } from './ui/panels.js';
+import { createReactionBar } from './ui/ReactionBar.js';
+import { openCounterSheet } from './ui/CounterSheet.js';
 import { ClientPeer, RoomNotFoundError } from './net/ClientPeer.js';
 
 const WELCOME_TIMEOUT_MS = 8000;
 const MAX_RETRY_DELAY_MS = 8000;
 const SABOTAGE_DELAY_MS = 1000; // «Sabotaggio»: ritardo su ogni tocco del primo in classifica
+
+/** Fasi in cui la barra delle reazioni è visibile (inizio turno, scommesse, lancio, classifiche). */
+const REACTION_PHASES = new Set([PHASE.LOBBY, PHASE.SHOP, PHASE.BETTING, PHASE.AWAIT_SPIN, PHASE.SPINNING, PHASE.LANDING, PHASE.TURN_RESULT, PHASE.AWARDS, PHASE.GAME_OVER]);
+/** Fasi di gioco in cui il Bancone è raggiungibile dal dock. */
+const COUNTER_PHASES = new Set([PHASE.SHOP, PHASE.BETTING, PHASE.AWAIT_SPIN, PHASE.SPINNING, PHASE.LANDING, PHASE.CHOICE, PHASE.EVENT, PHASE.TURN_RESULT]);
+
+/**
+ * Altezza del palco 3D in Pocket per fase: la ruota è protagonista quando gira e si ferma,
+ * si fa da parte quando serve spazio per rispondere/comprare.
+ */
+function stageModeFor(phase) {
+  switch (phase) {
+    case PHASE.SPINNING:
+    case PHASE.LANDING:
+      return 'focus';
+    case PHASE.AWAIT_SPIN:
+    case PHASE.TURN_RESULT:
+    case PHASE.AWARDS:
+    case PHASE.GAME_OVER:
+      return 'half';
+    case PHASE.LOBBY:
+      return 'lobby';
+    default:
+      return 'work';
+  }
+}
 
 /** Telefono che entra in una stanza esistente (Salotto o Pocket) tramite WebRTC. */
 export function startRemoteClient(root, { roomCode, name }) {
@@ -54,6 +82,11 @@ export class ClientApp {
   #pendingPicker = false;
   #deadline = null;
   #lastPhase = null;
+  /** Ultimo BEER_POOL_SYNC: { assigned: { playerId: beerId }, free: beerId[] } */
+  #beerPool = null;
+  #picker = null;
+  #counterSheet = null;
+  #reactions = null;
 
   constructor(root, { roomCode, name, connect, canReconnect = true, isOwner = false }) {
     this.root = root;
@@ -160,7 +193,7 @@ export class ClientApp {
       case MSG.SPIN_START:
         this.#stageSync?.playSpin(msg.plan, msg.elapsed, msg.topSlot);
         if (!this.#stageSync && msg.topSlot && !msg.plan.kind) this.topSlot?.spin(msg.topSlot, topSlotRevealMs(msg.plan) - msg.elapsed);
-        if (this.mode === MODE.POCKET) sfx.spinStart();
+        if (this.mode === MODE.POCKET) SoundEngine.playSpinStart();
         vibrate(30);
         break;
       case MSG.EVENT:
@@ -168,6 +201,14 @@ export class ClientApp {
         break;
       case MSG.TOAST:
         toast(msg.text);
+        break;
+      case MSG.BEER_POOL_SYNC:
+        this.#beerPool = { assigned: msg.assigned ?? {}, free: msg.free ?? [] };
+        this.#picker?.update();
+        break;
+      case MSG.PLAYER_EMOTE:
+        // In Pocket ogni telefono anima la birra 3D; in Salotto ci pensa la TV
+        this.#stageSync?.emote(msg.peerId, msg.emote, true);
         break;
       case MSG.REJECT:
         this.#stopped = true;
@@ -190,7 +231,7 @@ export class ClientApp {
     if (this.canReconnect) save('ruota.session', { roomCode: this.roomCode, name: this.name, at: Date.now() });
     if (firstTime) {
       this.#renderShell();
-      sfx.join();
+      SoundEngine.playJoin();
       // Primo ingresso: l'host ci ha servito una birra a caso, proponiamo di cambiarla
       if (!msg.rejoined) this.#pendingPicker = true;
     }
@@ -227,7 +268,37 @@ export class ClientApp {
       case 'pint':
         if (e.playerId === this.playerId) {
           vibrate([80, 40, 160]);
-          sfx.win();
+          SoundEngine.playWin();
+        }
+        break;
+      case 'sticker_trigger':
+        if (this.mode === MODE.POCKET || e.playerId === this.playerId) SoundEngine.playStickerTrigger(Boolean(e.trap));
+        if (e.trap && e.playerId === this.playerId) vibrate([120, 60, 120]);
+        break;
+      case 'sneaky':
+        toast('🕵️ Movimento sospetto al bancone!');
+        if (this.mode === MODE.POCKET) SoundEngine.playSneaky();
+        break;
+      case 'splash':
+        if (e.targetId === this.playerId) {
+          toast(`🫗 ${this.#name(e.playerId)} ti ha inzuppato di Birra Analcolica!`);
+          SoundEngine.playSplash();
+          vibrate([200, 80, 200]);
+        } else if (this.mode === MODE.POCKET) SoundEngine.playSplash();
+        break;
+      case 'shot':
+        if (this.mode === MODE.POCKET && e.playerId !== this.playerId) SoundEngine.playShot();
+        break;
+      case 'bounty':
+        if (e.targetId === this.playerId) {
+          toast('🎯 Hai una TAGLIA sulla testa per 2 turni!');
+          vibrate([60, 40, 60, 40, 60]);
+        }
+        break;
+      case 'bounty_claimed':
+        if (e.playerId === this.playerId) {
+          SoundEngine.playCoin();
+          vibrate([60, 30, 120]);
         }
         break;
       case 'award':
@@ -275,7 +346,12 @@ export class ClientApp {
     this.reconnectEl = h('div', { class: 'ctl-reconnect' }, h('div', { class: 'loader' }), h('p', {}, 'Riconnessione...'));
     this.topSlot = createTopSlot();
     const pocket = this.mode === MODE.POCKET;
-    this.wheelEl = pocket ? h('section', { class: 'ctl-wheel' }, this.topSlot.el) : null;
+    // Pocket: il palco 3D sta in un riquadro ad altezza variabile per fase (vedi stageModeFor);
+    // il Top Slot NON sta sopra la ruota (la coprirebbe) ma in una riga compatta sotto.
+    this.wheelEl = pocket ? h('section', { class: 'ctl-wheel' }) : null;
+    this.#reactions = createReactionBar({ onEmote: (emote) => this.#sendEmote(emote) });
+    this.counterBtn = h('button', { type: 'button', class: 'counter-btn', onclick: () => this.#openCounter() }, h('span', {}, '🍻'), h('span', { class: 'counter-label' }, 'Bancone'));
+    this.dockEl = h('div', { class: 'ctl-dock' }, this.#reactions.el, this.counterBtn);
 
     this.shellEl = h(
       'div',
@@ -283,9 +359,10 @@ export class ClientApp {
       this.headerEl,
       this.statusEl,
       this.wheelEl,
-      pocket ? null : h('div', { class: 'ctl-topslot' }, this.topSlot.el),
+      h('div', { class: 'ctl-topslot' }, this.topSlot.el),
       this.timerEl,
       this.panelHost,
+      this.dockEl,
       this.playersEl,
       this.reconnectEl,
     );
@@ -294,25 +371,48 @@ export class ClientApp {
     if (this.snapshot) this.#onState(this.snapshot);
   }
 
+  #sendEmote(emote) {
+    if (!this.link || !this.playerId) return;
+    this.link.send(message.playerEmote(this.playerId, emote));
+  }
+
+  #openCounter() {
+    if (this.#counterSheet || !this.snapshot) return;
+    this.#counterSheet = openCounterSheet({
+      getCtx: () => ({ s: this.snapshot, p: this.priv ?? {}, meId: this.playerId }),
+      send: (a) => this.send(a),
+      onClose: () => (this.#counterSheet = null),
+    });
+  }
+
   /** Pocket: Three.js viene scaricato solo qui (i controller Salotto non lo caricano mai). */
   async #loadWheel() {
     if (this.#wheelLoading) return;
     this.#wheelLoading = true;
     const [{ StageRenderer }, { StageSync }] = await Promise.all([import('../shared/stage/StageRenderer.js'), import('../shared/stage/StageSync.js')]);
     const stage = new StageRenderer(this.wheelEl, { quality: 'low' });
-    stage.on('tick', () => sfx.tick());
-    this.#stageSync = new StageSync(stage, { topSlot: this.topSlot });
+    this.#stageSync = new StageSync(stage, { topSlot: this.topSlot, overlayTopSlot: false });
     if (this.snapshot) this.#stageSync.applyState(this.snapshot);
   }
 
   #openPicker(firstTime = false) {
-    if (!this.snapshot || document.querySelector('.modal')) return;
-    openBeerPicker({
-      players: this.snapshot.players,
-      myId: this.playerId,
+    if (!this.snapshot || this.#picker || document.querySelector('.modal')) return;
+    this.#picker = openBeerPicker({
       firstTime,
-      onPick: (beerId) => this.link?.send({ t: MSG.AVATAR_PICK, beerId }),
+      getView: () => ({
+        // fonte: l'ultimo BEER_POOL_SYNC; in mancanza, le birre dei giocatori nello snapshot
+        assigned: this.#beerPool?.assigned ?? Object.fromEntries(this.snapshot.players.filter((p) => p.beer).map((p) => [p.id, p.beer])),
+        players: this.snapshot.players,
+        myId: this.playerId,
+        canChange: this.#canChangeBeer(),
+      }),
+      onPick: (beerId) => this.link?.send(message.requestBeerChange(this.playerId, beerId)),
+      onClose: () => (this.#picker = null),
     });
+  }
+
+  #canChangeBeer() {
+    return this.priv?.canChangeBeer ?? this.snapshot?.phase === PHASE.LOBBY;
   }
 
   #me() {
@@ -336,6 +436,15 @@ export class ClientApp {
     this.shellEl.classList.toggle('sab-blackout', Boolean(sabotage.blackout));
     this.shellEl.classList.toggle('sab-shaky', Boolean(sabotage.shaky));
     this.shellEl.classList.toggle('sab-delay', Boolean(sabotage.delay));
+    this.shellEl.dataset.stage = stageModeFor(s.phase);
+    this.#reactions.setVisible(REACTION_PHASES.has(s.phase));
+    const inGame = COUNTER_PHASES.has(s.phase);
+    this.counterBtn.hidden = !inGame;
+    this.counterBtn.classList.toggle('open', Boolean(priv.counter?.open));
+    this.counterBtn.classList.toggle('has-shot', Boolean(priv.counter?.shot));
+    this.dockEl.classList.toggle('hidden', !REACTION_PHASES.has(s.phase) && !inGame);
+    this.#counterSheet?.update();
+    this.#picker?.update();
     document.body.classList.toggle('happy-hour', Boolean(s.turn?.happyHour));
     this.root.style.setProperty('--me', me.color);
 
@@ -357,24 +466,25 @@ export class ClientApp {
     this.#updateTimer();
 
     // Top Slot visibile su tutti i telefoni durante lancio e risoluzione
-    if (this.mode !== MODE.POCKET) {
-      if (s.topSlot && [PHASE.LANDING, PHASE.CHOICE, PHASE.EVENT].includes(s.phase)) this.topSlot.show(s.topSlot);
-      else if (s.phase !== PHASE.SPINNING) this.topSlot.hide();
-    }
+    if (s.topSlot && [PHASE.LANDING, PHASE.CHOICE, PHASE.EVENT].includes(s.phase)) this.topSlot.show(s.topSlot);
+    else if (s.phase !== PHASE.SPINNING) this.topSlot.hide();
   }
 
   #updateHeader(s, me, priv) {
     const st = priv.status ?? me.status ?? {};
-    const badges = [st.shield > 0 && '🛡️', st.anchor > 0 && '⚓', st.mirror > 0 && '🪞', st.skip > 0 && '🕳️'].filter(Boolean).join(' ');
-    fill(this.headerEl, 
+    const badges = [st.shield > 0 && '🛡️', st.anchor > 0 && '⚓', st.mirror > 0 && '🪞', st.skip > 0 && '🕳️', me.marks?.bounty && '🎯', me.marks?.wet && '🫗'].filter(Boolean).join(' ');
+    const canChange = this.#canChangeBeer();
+    fill(
+      this.headerEl,
       h(
         'button',
-        { class: 'me', type: 'button', title: 'Cambia birra', onclick: () => s.phase === PHASE.LOBBY && this.#openPicker() },
+        { class: 'me', type: 'button', title: 'Cambia birra', onclick: () => canChange && this.#openPicker() },
         beerIcon(me.beer, 'sm'),
-        h('span', { class: 'me-text' }, h('span', { class: 'me-name' }, me.name), h('span', { class: 'me-beer' }, `${getBeer(me.beer).name}${s.phase === PHASE.LOBBY ? ' ▾' : ''}${badges ? ` · ${badges}` : ''}`)),
+        h('span', { class: 'me-text' }, h('span', { class: 'me-name' }, me.name), h('span', { class: 'me-beer' }, `${getBeer(me.beer).name}${badges ? ` · ${badges}` : ''}`)),
       ),
+      canChange ? h('button', { class: 'beer-change-btn', type: 'button', onclick: () => this.#openPicker() }, h('span', {}, '🍺'), h('span', {}, 'Cambia Birra')) : null,
       h('div', { class: 'wallet' }, h('span', { class: 'pints' }, `🍺 ${priv.pints ?? me.pints ?? 0}`), h('span', { class: 'coins' }, `${priv.coins ?? me.coins ?? 0}`, h('span', { class: 'coin' }))),
-      this.isOwner ? h('button', { class: 'btn btn-small', onclick: () => this.#showInvite() }, `+ ${this.roomCode}`) : h('div', { class: 'room-badge' }, this.roomCode),
+      this.isOwner ? h('button', { class: 'room-badge invite', type: 'button', onclick: () => this.#showInvite() }, `＋${this.roomCode}`) : h('div', { class: 'room-badge' }, this.roomCode),
     );
   }
 

@@ -1,7 +1,7 @@
 import { MAX_NAME_LENGTH, MAX_PLAYERS } from '../../shared/config.js';
 import { createBaseSegments } from '../../shared/wheel/segments.js';
-import { BEERS, getBeer, isBeerId } from '../../shared/avatars/beers.js';
-import { randomInt } from '../../shared/util/random.js';
+import { getBeer } from '../../shared/avatars/beers.js';
+import { BeerPoolManager } from './BeerPoolManager.ts';
 
 export const STARTING_COINS = 100;
 
@@ -17,13 +17,13 @@ export class GameState {
     /** @type {Array<{id:string, clientId:string, name:string, beer:string|null, lastBeer:string|null, color:string, coins:number, connected:boolean, isOwner:boolean}>} */
     this.players = [];
     /**
-     * POOL DELLE BIRRE DISPONIBILI (stato globale dell'host).
-     * Parte con tutte e 12. Regola: una birra è o nel pool o addosso a UN SOLO giocatore connesso.
-     *  - entra un giocatore     → estrazione casuale dal pool (e rimozione)
-     *  - esce un giocatore      → la sua birra torna nel pool
-     *  - cambio birra volontario → la vecchia torna nel pool, la nuova ne esce
+     * POOL DELLE BIRRE (stato globale dell'host), vedi BeerPoolManager.
+     * Regola: una birra è o libera o addosso a UN SOLO giocatore connesso.
+     *  - entra un giocatore      → estrazione casuale tra le libere
+     *  - esce un giocatore       → la sua birra torna libera
+     *  - cambio birra volontario → REQUEST_BEER_CHANGE: la vecchia si libera, la nuova viene presa
      */
-    this.beerPool = BEERS.map((b) => b.id);
+    this.beers = new BeerPoolManager();
     this.segments = createBaseSegments();
     this.wheelAngle = 0;
     this.nextPlayerNumber = 1;
@@ -52,7 +52,7 @@ export class GameState {
       player.name = name;
       player.connected = true;
       // Rientro: riprende la sua vecchia birra se è ancora nel pool, altrimenti una nuova a caso
-      if (!player.beer) this.#assignBeer(player, this.#takeBeer(player.lastBeer));
+      if (!player.beer) this.#assignBeer(player, this.beers.assign(player.id, player.lastBeer));
       return { player, rejoined: true };
     }
     const n = this.nextPlayerNumber++;
@@ -68,10 +68,12 @@ export class GameState {
       connected: true,
       isOwner,
       joinedAt: n,
-      status: { shield: 0, anchor: 0, skip: 0, mirror: 0 },
+      status: emptyStatus(),
+      shot: null,
+      counterSlipTurn: -1,
       stats: emptyStats(),
     };
-    this.#assignBeer(player, this.#takeBeer());
+    this.#assignBeer(player, this.beers.assign(player.id));
     this.players.push(player);
     return { player, rejoined: false };
   }
@@ -82,44 +84,32 @@ export class GameState {
     if (!player) return null;
     player.connected = false;
     if (player.beer) {
-      this.#releaseBeer(player.beer);
+      this.beers.release(player.id);
       player.lastBeer = player.beer; // preferenza per quando rientra
       player.beer = null;
     }
     return player;
   }
 
-  /** Birre ancora nel pool (copia). */
+  /** Birre ancora libere (copia). */
+  get beerPool() {
+    return this.beers.free;
+  }
+
   freeBeers() {
-    return [...this.beerPool];
+    return this.beers.free;
   }
 
   /**
-   * Cambio birra richiesto dal giocatore. Ogni birra è unica nella stanza.
-   * @returns {'ok'|'invalid'|'taken'}
+   * Cambio birra richiesto dal giocatore (REQUEST_BEER_CHANGE). Ogni birra è unica nella stanza.
+   * @returns {'ok'|'same'|'invalid'|'taken'}
    */
   setBeer(playerId, beerId) {
     const player = this.getPlayer(playerId);
-    if (!player || !player.connected || !isBeerId(beerId)) return 'invalid';
-    if (player.beer === beerId) return 'ok';
-    if (!this.beerPool.includes(beerId)) return 'taken';
-    this.#releaseBeer(player.beer);
-    this.#assignBeer(player, this.#takeBeer(beerId));
-    return 'ok';
-  }
-
-  /**
-   * Toglie una birra dal pool: quella preferita se c'è, altrimenti una a caso tra le rimaste.
-   * Non pesca MAI fuori dal pool: se è vuoto è un errore di logica (isFull() lo impedisce).
-   */
-  #takeBeer(preferred = null) {
-    if (!this.beerPool.length) throw new Error('Pool delle birre vuoto: stanza piena');
-    const index = preferred && this.beerPool.includes(preferred) ? this.beerPool.indexOf(preferred) : randomInt(0, this.beerPool.length - 1);
-    return this.beerPool.splice(index, 1)[0];
-  }
-
-  #releaseBeer(beerId) {
-    if (beerId && !this.beerPool.includes(beerId)) this.beerPool.push(beerId);
+    if (!player || !player.connected) return 'invalid';
+    const outcome = this.beers.request(playerId, beerId);
+    if (outcome === 'ok') this.#assignBeer(player, beerId);
+    return outcome;
   }
 
   #assignBeer(player, beerId) {
@@ -136,7 +126,9 @@ export class GameState {
     for (const p of this.players) {
       p.coins = STARTING_COINS;
       p.pints = 0;
-      p.status = { shield: 0, anchor: 0, skip: 0, mirror: 0 };
+      p.status = emptyStatus();
+      p.shot = null;
+      p.counterSlipTurn = -1;
       p.stats = emptyStats();
     }
     this.segments = createBaseSegments();
@@ -144,7 +136,11 @@ export class GameState {
 
   /** Giocatori senza dati segreti (clientId) né interni. */
   publicPlayers() {
-    return this.players.map(({ clientId: _secret, lastBeer: _last, stats: _stats, ...pub }) => pub);
+    return this.players.map(({ clientId: _secret, lastBeer: _last, stats: _stats, shot: _shot, counterSlipTurn: _slip, status, ...pub }) => ({
+      ...pub,
+      // gli effetti del Bancone in attesa (Assenzio, Tequila) restano segreti fino all'uso
+      status: { shield: status.shield, anchor: status.anchor, skip: status.skip, mirror: status.mirror },
+    }));
   }
 
   #uniqueName(name, ownId) {
@@ -163,6 +159,11 @@ export function sanitizeName(raw) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, MAX_NAME_LENGTH);
+}
+
+/** Stati del giocatore: turni rimasti degli adesivi difensivi e effetti del Bancone in attesa. */
+export function emptyStatus() {
+  return { shield: 0, anchor: 0, skip: 0, mirror: 0, absinthe: false, tequila: false, wet: false };
 }
 
 /** Statistiche per i Bonus Segreti di fine partita. */

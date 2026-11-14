@@ -1,6 +1,6 @@
 import { Emitter } from '../shared/Emitter.js';
 import { CONNECTION_TIMEOUT_MS, HEARTBEAT_MS } from '../shared/config.js';
-import { MSG, PROTOCOL_VERSION, REJECT_REASON } from '../shared/protocol.js';
+import { MSG, PROTOCOL_VERSION, REJECT_REASON, message } from '../shared/protocol.js';
 import { randomFloat } from '../shared/util/random.js';
 import { getBeer } from '../shared/avatars/beers.js';
 import { HostPeer } from './net/HostPeer.js';
@@ -22,7 +22,11 @@ const STATE_THROTTLE_MS = 60;
  *  - a ciascuno i suoi dati privati (MSG.PRIVATE): parola dell'impostore, negozio, Tappi veri a
  *    classifica nascosta, timer personale e sabotaggi.
  *
- * Eventi locali: 'state' (snapshot), 'game-event' (spin, premi, toast...), 'player-joined',
+ * Birre: il registro è il BeerPoolManager in GameState (Map peerId → beerId). Ogni modifica
+ * (ingresso, uscita, REQUEST_BEER_CHANGE) viene trasmessa a tutti con BEER_POOL_SYNC.
+ * Emote: PLAYER_EMOTE validata (cooldown) e ritrasmessa a tutti.
+ *
+ * Eventi locali: 'state' (snapshot), 'game-event' (spin, premi, toast, emote...), 'player-joined',
  *                'player-left', 'avatar-changed', 'signaling'
  */
 export class HostCore extends Emitter {
@@ -140,6 +144,7 @@ export class HostCore extends Emitter {
     link.send({ t: MSG.WELCOME, playerId: player.id, mode: this.mode, roomCode: state.roomCode, rejoined });
     this.engine.onPlayerJoined(player);
     this.#sendStateNow();
+    this.#syncBeerPool();
     this.emit('player-joined', player, rejoined);
   }
 
@@ -151,27 +156,55 @@ export class HostCore extends Emitter {
       case MSG.ACTION:
         if (msg.a && typeof msg.a === 'object') this.engine.handleAction(session.playerId, msg.a);
         break;
-      case MSG.AVATAR_PICK: {
-        const before = this.state.getPlayer(session.playerId)?.beer;
-        const outcome = this.state.setBeer(session.playerId, msg.beerId);
-        if (outcome === 'ok' && before !== msg.beerId) {
-          console.info(`[birre] ${this.state.getPlayer(session.playerId).name} cambia ${before} → ${msg.beerId} (${before} torna nel pool)`);
-          // gli adesivi già incollati prendono il nuovo colore del proprietario
-          for (const seg of this.state.segments) if (seg.sticker?.ownerId === session.playerId) seg.sticker.ownerColor = this.state.getPlayer(session.playerId).color;
-        }
-        if (outcome === 'taken') session.link.send({ t: MSG.TOAST, text: `${getBeer(msg.beerId).name} è già di un altro giocatore` });
-        if (outcome === 'ok') {
-          this.#scheduleState();
-          this.emit('avatar-changed', this.state.getPlayer(session.playerId));
+      case MSG.REQUEST_BEER_CHANGE:
+        this.#onBeerChange(session, msg.newBeerId);
+        break;
+      case MSG.PLAYER_EMOTE:
+        if (this.engine.emote(session.playerId, msg.emote)) {
+          const event = { type: 'emote', playerId: session.playerId, emote: msg.emote };
+          this.broadcast(message.playerEmote(session.playerId, msg.emote));
+          this.emit('game-event', event);
         }
         break;
-      }
       case MSG.PONG:
         if (typeof msg.ts === 'number') session.rtt = performance.now() - msg.ts;
         break;
       default:
         break;
     }
+  }
+
+  /**
+   * REQUEST_BEER_CHANGE: l'id del giocatore lo decide la sessione (un client non può cambiare la
+   * birra di un altro anche se mette un peerId diverso nel messaggio).
+   */
+  #onBeerChange(session, newBeerId) {
+    const pid = session.playerId;
+    const player = this.state.getPlayer(pid);
+    if (!player) return;
+    if (!this.engine.canChangeBeer()) {
+      session.link.send({ t: MSG.TOAST, text: '🍺 Troppo tardi: la ruota ha già girato, ti tieni la tua birra' });
+      return;
+    }
+    const before = player.beer;
+    const outcome = this.state.setBeer(pid, newBeerId);
+    if (outcome === 'taken') {
+      const owner = this.state.getPlayer(this.state.beers.ownerOf(newBeerId));
+      session.link.send({ t: MSG.TOAST, text: `${getBeer(newBeerId).name} è già di ${owner?.name ?? 'un altro giocatore'}` });
+      this.#syncBeerPool(); // il client aveva una vista vecchia: riallineiamolo
+      return;
+    }
+    if (outcome !== 'ok') return;
+    console.info(`[birre] ${player.name} cambia ${before} → ${newBeerId} (${before} torna libera)`);
+    // gli adesivi già incollati prendono il nuovo colore del proprietario
+    for (const seg of this.state.segments) if (seg.sticker?.ownerId === pid) seg.sticker.ownerColor = player.color;
+    this.#syncBeerPool();
+    this.#sendStateNow();
+    this.emit('avatar-changed', player);
+  }
+
+  #syncBeerPool() {
+    this.broadcast(message.beerPoolSync(this.state.beers.snapshot(), this.state.beers.free));
   }
 
   #onClose(session) {
@@ -184,6 +217,7 @@ export class HostCore extends Emitter {
     const player = this.state.disconnectPlayer(session.playerId);
     if (player) console.info(`[birre] ${player.name} disconnesso: ${player.lastBeer} torna nel pool (${this.state.beerPool.length} libere)`);
     this.engine.onPlayerLeft(player);
+    this.#syncBeerPool();
     this.emit('player-left', player);
   }
 

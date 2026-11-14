@@ -41,7 +41,7 @@ async function playGame(gameIndex) {
   const cancel = (id) => timers.delete(id);
 
   const state = new GameState({ mode: 'salotto', roomCode: 'SIMU' });
-  const stats = { stickers: 0, pints: 0, events: {}, sabotages: 0, happy: false, topSlot: 0 };
+  const stats = { stickers: 0, pints: 0, events: {}, sabotages: 0, happy: false, topSlot: 0, counter: {}, emotes: 0 };
   const engine = new GameEngine(state, {
     rng,
     now: () => now,
@@ -53,6 +53,7 @@ async function playGame(gameIndex) {
       if (e.type === 'pint') stats.pints++;
       if (e.type === 'happy_hour') stats.happy = true;
       if (e.type === 'top_slot_hit') stats.topSlot++;
+      if (['bounty', 'bounty_claimed', 'sneaky', 'shot', 'splash'].includes(e.type)) stats.counter[e.type] = (stats.counter[e.type] ?? 0) + 1;
     },
   });
 
@@ -79,6 +80,17 @@ async function playGame(gameIndex) {
         const cur = engine.snapshot();
         const mine = engine.privateFor(p.id);
         if (!p.connected) return;
+        // Bancone & Sottobanco: a inizio turno qualcuno trama qualcosa
+        if (mine.counter?.open && rng() < 0.25) {
+          const others = state.players.filter((x) => x.connected && x.id !== p.id);
+          const target = others.length ? pick(others).id : null;
+          const r = rng();
+          if (mine.counter.canUseShot && r < 0.6) act(p.id, { kind: 'counter_use', targetId: target });
+          else if (r < 0.3) act(p.id, { kind: 'counter_bounty', targetId: target });
+          else if (r < 0.55) act(p.id, { kind: 'counter_slip', targetId: target, amount: pick([20, 50]) });
+          else act(p.id, { kind: 'counter_buy', shot: pick(['assenzio', 'tequila', 'analcolica']) });
+        }
+        if (rng() < 0.2 && engine.emote(p.id, pick(['cheers', 'laugh', 'boo', 'fire']))) stats.emotes++;
         switch (cur.phase) {
           case PHASE.SHOP:
             if (cur.shop?.playerId !== p.id || !mine.shop) return;
@@ -140,6 +152,12 @@ async function playGame(gameIndex) {
       }
     }
     for (const seg of state.segments) if (![1, 2, 3].includes(seg.size)) throw new Error('size spicchio non valida');
+    if (!state.beers.check()) throw new Error('Pool birre incoerente');
+    for (const p of state.players) {
+      if (p.connected && state.beers.beerOf(p.id) !== p.beer) throw new Error(`Birra di ${p.name} non allineata al pool`);
+      if (p.shot && !['assenzio', 'tequila', 'analcolica'].includes(p.shot)) throw new Error('Shot non valido');
+    }
+    for (const [target, b] of engine.bounties) if (!state.getPlayer(target) || b.turnsLeft < 1 || b.turnsLeft > 2) throw new Error('Taglia non valida');
   };
 
   let steps = 0;
@@ -174,7 +192,7 @@ async function playGame(gameIndex) {
 }
 
 let totalMinutes = 0;
-const agg = { stickers: 0, pints: 0, sabotages: 0, happy: 0, topSlot: 0, events: {} };
+const agg = { stickers: 0, pints: 0, sabotages: 0, happy: 0, topSlot: 0, events: {}, counter: {}, emotes: 0 };
 for (let g = 0; g < GAMES; g++) {
   const r = await playGame(g);
   totalMinutes += r.minutes;
@@ -184,8 +202,11 @@ for (let g = 0; g < GAMES; g++) {
   agg.topSlot += r.stats.topSlot;
   agg.happy += r.stats.happy ? 1 : 0;
   for (const [k, v] of Object.entries(r.stats.events)) agg.events[k] = (agg.events[k] ?? 0) + v;
+  for (const [k, v] of Object.entries(r.stats.counter)) agg.counter[k] = (agg.counter[k] ?? 0) + v;
+  agg.emotes += r.stats.emotes;
 }
 console.log(`OK: ${GAMES} partite simulate senza errori.`);
 console.log(`Durata media (tempo di gioco simulato): ${(totalMinutes / GAMES).toFixed(1)} min`);
 console.log(`Adesivi piazzati: ${agg.stickers} · Pinte comprate: ${agg.pints} · Top Slot centrati: ${agg.topSlot} · Happy Hour in ${agg.happy}/${GAMES} partite`);
 console.log(`Eventi giocati: ${JSON.stringify(agg.events)}`);
+console.log(`Bancone: ${JSON.stringify(agg.counter)} · emote accettate: ${agg.emotes}`);

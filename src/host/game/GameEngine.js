@@ -11,6 +11,7 @@ import { runPour } from './events/pour.js';
 import { runAuction } from './events/auction.js';
 import { runPriceIsRight } from './events/priceIsRight.js';
 import { computeAwards } from './awards.js';
+import { acceptEmote, claimBounty, counterView, handleCounterAction, playerMarks, tickBounties } from './counter.js';
 
 /** Tempi delle fasi (ms). */
 export const TIMING = Object.freeze({
@@ -89,6 +90,14 @@ export class GameEngine {
   lastSticker = null;
   coinHistory = [];
   eventPrivate = new Map();
+  /** Bancone: taglie attive (bersaglio → { placerId, turnsLeft }). */
+  bounties = new Map();
+  /** Ultima emote accettata per giocatore (cooldown). */
+  emoteAt = new Map();
+  /** Il cambio birra è permesso in lobby e finché la ruota non ha girato la prima volta. */
+  firstSpinDone = false;
+  /** Chi sta causando i movimenti di Tappi in corso (proprietario dell'adesivo): per le taglie. */
+  blameId = null;
   #inputHandler = null;
   #waiters = new Set();
   #gen = 0;
@@ -139,6 +148,8 @@ export class GameEngine {
     const player = this.state.getPlayer(playerId);
     if (!player) return false;
     if (this.#lobbyOrGlobalAction(player, action, false)) return true;
+    const counter = handleCounterAction(this, player, action);
+    if (counter !== null) return counter;
 
     if (action.kind === 'spin') {
       if (this.phase !== PHASE.AWAIT_SPIN || playerId !== this.turnPlayerId || !this.#spinRequest) return false;
@@ -146,6 +157,16 @@ export class GameEngine {
       return true;
     }
     return this.#inputHandler ? this.#inputHandler(playerId, action) !== false : false;
+  }
+
+  /** Cambio birra (REQUEST_BEER_CHANGE): in lobby e prima del primo lancio della partita. */
+  canChangeBeer() {
+    return this.phase === PHASE.LOBBY || !this.firstSpinDone;
+  }
+
+  /** Emote dal telefono: true se rispetta il cooldown e va trasmessa a tutti. */
+  emote(playerId, emote) {
+    return acceptEmote(this, this.state.getPlayer(playerId), emote);
   }
 
   /** Ferma tutto (es. l'host chiude la stanza). */
@@ -211,6 +232,7 @@ export class GameEngine {
         coins: hidden ? null : p.coins,
         pints: hidden ? null : p.pints,
         betPlaced: betsPlaced.includes(p.id),
+        marks: playerMarks(this, this.state.getPlayer(p.id)),
       })),
       turnPlayerId: this.turnPlayerId,
       wheel: { segments: this.state.segments, angle: this.state.wheelAngle },
@@ -244,6 +266,8 @@ export class GameEngine {
       bet: this.turn?.bets?.get(playerId) ?? null,
       event: this.eventPrivate.get(playerId) ?? null,
       choice: this.choice && this.choice.playerId === playerId ? { kind: this.choice.kind, title: this.choice.title, options: this.choice.options } : null,
+      counter: counterView(this, player),
+      canChangeBeer: this.canChangeBeer(),
     };
   }
 
@@ -312,8 +336,17 @@ export class GameEngine {
       if (delta > 0 && boostable && this.turn && player.id === this.turn.landerId) delta *= this.turn.multiplier * this.turn.boost;
       if (this.happyHour) delta *= 2;
     }
+    // Tequila Bum Bum: durante l'evento del turno i guadagni di chi l'ha bevuta valgono x2.5
+    if (delta > 0 && !refund && this.turn?.tequila && this.turn.eventWindow && player.id === this.turn.landerId) {
+      delta = Math.round(delta * 2.5);
+      this.turn.tequilaGain += delta;
+    }
     if (delta < 0) delta = Math.max(delta, -player.coins);
     player.coins += delta;
+    // Taglia: chi fa perdere Tappi al bersaglio (con un suo adesivo) la riscuote
+    if (delta < 0 && this.blameId && this.blameId !== player.id && this.bounties.has(player.id)) {
+      claimBounty(this, player, this.state.getPlayer(this.blameId), 'gli ha fatto perdere Tappi');
+    }
     if (this.turn) {
       this.turn.ledger.push({ playerId: player.id, delta, reason });
       if (player.id === this.turn.landerId && !refund && reason !== 'scommessa') this.turn.landerNet += delta;
@@ -351,7 +384,10 @@ export class GameEngine {
 
   /** Flag di sabotaggio attivi per un giocatore nell'evento in corso. */
   sabotageFlags(playerId) {
-    const flags = { blackout: false, shaky: false, dyslexia: false, delay: false, halfTime: false };
+    const flags = { blackout: false, shaky: false, dyslexia: false, delay: false, halfTime: false, foam: false };
+    // Birra Analcolica: al prossimo Trivia (anche Sfida) le risposte sono coperte di schiuma
+    const kind = this.event?.kind;
+    if ((kind === 'trivia' || kind === 'duel') && this.state.getPlayer(playerId)?.status.wet) flags.foam = true;
     if (!this.activeSabotages.length) return flags;
     const leaderId = this.rankingOf()[0]?.id;
     for (const sab of this.activeSabotages) {
@@ -516,6 +552,8 @@ export class GameEngine {
     this.feed = [];
     this.turnSummary = null;
     this.#turnCursor = -1;
+    this.bounties.clear();
+    this.firstSpinDone = false;
     this.questions = getUsedQuestionsTracker({ rng: this.rng });
     this.usedWords.clear();
     this.usedNumbers.clear();
@@ -537,6 +575,8 @@ export class GameEngine {
     this.ranking = [];
     this.turnSummary = null;
     this.eventPrivate.clear();
+    this.bounties.clear();
+    this.firstSpinDone = false;
     this.state.resetForNewGame();
     this.changed();
   }
@@ -736,6 +776,7 @@ export class GameEngine {
     const plan = { id: ++this.#spinSeq, ...planSpin(this.state.wheelAngle, force) };
     this.spin = { plan, startedAt: this.now(), playerId: player.id };
     this.phase = PHASE.SPINNING;
+    this.firstSpinDone = true; // da qui in poi niente più cambi di birra
     this.log(`[ruota] lancio #${plan.id}: forza ${(plan.force * 100).toFixed(0)}% → ω0 ${plan.omega0.toFixed(2)} rad/s, arresto in ${(plan.duration / 1000).toFixed(2)} s`);
     this.emit({ type: 'spin', plan, playerId: player.id, topSlot: this.topSlot });
     this.changed();
@@ -790,16 +831,32 @@ export class GameEngine {
       this.emit({ type: 'top_slot_hit', playerId: player.id });
     }
 
-    // 3. royalties e 4. effetto dell'adesivo
+    // 3. royalties e 4. effetto dell'adesivo (l'Assenzio salta royalties e trappole nemiche)
+    const absinthe = player.status.absinthe;
+    player.status.absinthe = false;
     if (segment.sticker) {
       const owner = this.state.getPlayer(segment.sticker.ownerId);
-      if (owner && owner.id !== player.id) {
+      const enemy = owner && owner.id !== player.id;
+      if (enemy && absinthe) {
+        this.line(`🧪 Grazie all'Assenzio ${player.name} non paga royalties a ${owner.name}`, 'bonus');
+      } else if (enemy) {
         const paid = this.award(owner, ROYALTIES * segment.sticker.level, { reason: 'royalties', raw: true });
         if (paid) this.line(`👑 Royalties: ${owner.name} incassa ${paid} Tappi`, 'bonus');
       }
-      await stickers.onLand(this, index, player);
+      if (enemy && absinthe && stickers.isTrap(segment.sticker.id)) {
+        this.line(`🧪 L'Assenzio rende ${player.name} immune alla trappola di ${owner.name}`, 'bonus');
+      } else {
+        await stickers.onLand(this, index, player);
+      }
     }
     await this.sleep(TIMING.landing);
+
+    // Tequila: il prossimo evento vale x2.5, ma se non si guadagna nulla costa 50 Tappi
+    const tequila = player.status.tequila;
+    player.status.tequila = false;
+    this.turn.tequila = tequila;
+    this.turn.tequilaGain = 0;
+    this.turn.eventWindow = true;
 
     // 5. evento dello spicchio
     switch (segment.type) {
@@ -817,6 +874,15 @@ export class GameEngine {
         break;
       default:
         this.line(`${info.label}: nessun evento`, 'info');
+    }
+    this.turn.eventWindow = false;
+    if (tequila) {
+      if (this.turn.tequilaGain > 0) {
+        this.line(`🍋 Tequila Bum Bum! ${player.name} incassa ${this.turn.tequilaGain} Tappi con l'x2.5`, 'gold');
+      } else {
+        const lost = -this.award(player, -50, { reason: 'Tequila', raw: true });
+        this.line(`🍋 La Tequila gira male: ${player.name} perde ${lost} Tappi`, 'malus');
+      }
     }
   }
 
@@ -837,6 +903,17 @@ export class GameEngine {
       if (dictator.count > 1) this.dictatorQueue.unshift({ ...dictator, count: dictator.count - 1 });
     }
     await runTrivia(this, { lander, category });
+    this.dryOff();
+  }
+
+  /** Dopo un Trivia la schiuma della Birra Analcolica se ne va: tutti asciutti. */
+  dryOff() {
+    for (const p of this.state.players) {
+      if (p.status.wet) {
+        p.status.wet = false;
+        this.changed();
+      }
+    }
   }
 
   async #minigame(lander) {
@@ -909,6 +986,7 @@ export class GameEngine {
       for (const key of ['shield', 'anchor', 'mirror']) if (p.status[key] > 0) p.status[key] -= 1;
     }
     if (this.hiddenTurns > 0) this.hiddenTurns -= 1;
+    tickBounties(this);
     for (const s of this.state.segments) if (s.sticker?.lockedTurns > 0) s.sticker.lockedTurns -= 1;
     this.turn = null;
     this.landing = null;

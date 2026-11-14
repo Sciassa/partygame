@@ -1,3 +1,4 @@
+import { SoundEngine } from '../../audio/SoundEngine.ts';
 import { h } from '../../shared/util/dom.js';
 import { vibrate } from '../../shared/util/device.js';
 import { PHASE } from '../../shared/protocol.js';
@@ -26,7 +27,9 @@ export function panelFor(ctx) {
     case PHASE.AWAIT_SPIN:
       return awaitSpinPanel(ctx);
     case PHASE.SPINNING:
-      return infoPanel('spinning', '🎡', 'La ruota gira...', ctx.mode === 'salotto' ? 'Guarda lo schermo' : 'Guarda la ruota');
+      return ctx.mode === 'salotto'
+        ? infoPanel('spinning', '🎡', 'La ruota gira...', 'Guarda lo schermo')
+        : { key: 'spinning:pocket', render: () => h('div', { class: 'panel panel-center panel-compact' }, h('h2', { class: 'panel-title' }, '🎡 La ruota gira...')) };
     case PHASE.LANDING:
       return landingPanel(ctx);
     case PHASE.CHOICE:
@@ -51,6 +54,34 @@ function infoPanel(key, icon, title, subtitle = '', extra = null) {
     key: `info:${key}:${title}:${subtitle}`,
     render: () => h('div', { class: 'panel panel-center' }, h('div', { class: 'panel-icon' }, icon), h('h2', { class: 'panel-title' }, title), subtitle && h('p', { class: 'muted' }, subtitle), extra),
   };
+}
+
+/**
+ * Birra Analcolica: copre `el` con bolle di schiuma che vanno scoppiate con 2 tocchi
+ * prima di poter toccare quello che c'è sotto.
+ */
+function foamCover(el, seed = 0, onClear = null) {
+  let taps = 0;
+  const bubbles = Array.from({ length: 9 }, (_, i) =>
+    h('span', { class: 'foam-bubble', style: { '--x': `${(i * 37 + seed * 23) % 100}%`, '--y': `${(i * 53 + seed * 17) % 100}%`, '--s': `${0.7 + ((i + seed) % 4) * 0.18}` } }),
+  );
+  const foam = h('span', {
+    class: 'foam',
+    role: 'button',
+    'aria-label': 'Schiuma: tocca due volte',
+    onclick: (e) => {
+      e.stopPropagation();
+      taps += 1;
+      SoundEngine.playPop();
+      vibrate(15);
+      foam.classList.add(taps >= 2 ? 'popped' : 'cracked');
+      if (taps >= 2) {
+        setTimeout(() => foam.remove(), 260);
+        onClear?.();
+      }
+    },
+  }, ...bubbles);
+  return h('div', { class: 'foam-wrap' }, el, foam);
 }
 
 function waiting(text) {
@@ -389,26 +420,35 @@ function triviaPanel(ctx, ev) {
 
   if (ev.mode === 'TRIVIA_CHOICE') {
     return {
-      key: `trivia:choice:${ev.question}:${sabotage.dyslexia}`,
+      key: `trivia:choice:${ev.question}:${sabotage.dyslexia}:${sabotage.foam}`,
       render: () =>
         h(
           'div',
           { class: 'panel' },
           header(ev),
           h('p', { class: 'question' }, ev.question),
-          h('div', { class: 'options' }, ev.options.map((opt, i) => h('button', { type: 'button', class: `option opt-${i}`, onclick: () => { vibrate(20); ctx.send({ kind: 'answer', choice: i }); } }, h('span', { class: 'opt-letter' }, 'ABCD'[i]), h('span', {}, show(opt))))),
+          sabotage.foam ? h('p', { class: 'foam-hint' }, '🫗 Ti hanno lanciato una Birra Analcolica: scoppia la schiuma (2 tocchi)!') : null,
+          h(
+            'div',
+            { class: 'options' },
+            ev.options.map((opt, i) => {
+              const btn = h('button', { type: 'button', class: `option opt-${i}`, onclick: () => { vibrate(20); ctx.send({ kind: 'answer', choice: i }); } }, h('span', { class: 'opt-letter' }, 'ABCD'[i]), h('span', {}, show(opt)));
+              return sabotage.foam ? foamCover(btn, i) : btn;
+            }),
+          ),
         ),
     };
   }
 
   return {
-    key: `trivia:open:${ev.question}`,
+    key: `trivia:open:${ev.question}:${sabotage.foam}`,
     render: () => {
       const input = h('input', { class: 'input', type: 'text', placeholder: 'Scrivi la risposta', maxLength: 60, autocomplete: 'off', autocapitalize: 'off', spellcheck: false, enterKeyHint: 'send' });
       const submit = () => input.value.trim() && ctx.send({ kind: 'answer', text: input.value.trim() });
       input.addEventListener('keydown', (e) => e.key === 'Enter' && submit());
-      setTimeout(() => input.focus(), 50);
-      return h('div', { class: 'panel' }, header(ev), h('p', { class: 'question' }, ev.question), h('p', { class: 'small muted' }, 'Risposta aperta: basta anche il cognome, i refusi piccoli sono perdonati'), input, actionButton('INVIA', submit));
+      if (!sabotage.foam) setTimeout(() => input.focus(), 50);
+      const field = sabotage.foam ? foamCover(h('div', { class: 'foam-field' }, input, actionButton('INVIA', submit)), 0, () => input.focus()) : h('div', { class: 'foam-field' }, input, actionButton('INVIA', submit));
+      return h('div', { class: 'panel' }, header(ev), h('p', { class: 'question' }, ev.question), h('p', { class: 'small muted' }, 'Risposta aperta: basta anche il cognome, i refusi piccoli sono perdonati'), field);
     },
   };
 }

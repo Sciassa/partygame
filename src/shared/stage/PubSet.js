@@ -18,8 +18,7 @@ export const PUB_COLORS = {
 export const SET = Object.freeze({
   counterTopY: STAND_FLOOR_Y,
   counterBackZ: -2.4,
-  counterFrontZ: 3.7,
-  avatarFrontZ: 2.5,
+  counterFrontZ: 5.8,
   backdropZ: -14,
 });
 

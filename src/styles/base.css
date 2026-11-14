@@ -313,23 +313,63 @@ p {
 .beer-icon-lg { --w: 30px; --h: 44px; border-width: 2px; }
 .beer-icon-xl { --w: 46px; --h: 66px; border-width: 2px; }
 
-.beer-icon.glass-weizen,
-.beer-icon.glass-stange,
-.beer-icon.glass-pilsner {
-  width: calc(var(--w) * 0.78);
+/* famiglie di bicchieri, come i modelli 3D (BeerAvatarBuilder.ts) */
+.beer-icon.glass-pint {
+  clip-path: polygon(0 0, 100% 0, 88% 100%, 12% 100%);
+  border-radius: 2px 2px 4px 4px;
+}
+
+.beer-icon.glass-weiss {
+  width: calc(var(--w) * 0.8);
   height: calc(var(--h) * 1.12);
+  border-radius: 5px 5px 4px 4px / 10px 10px 4px 4px;
 }
 
-.beer-icon.glass-mug,
-.beer-icon.glass-tumbler {
-  width: calc(var(--w) * 1.2);
-  height: calc(var(--h) * 0.85);
+.beer-icon.glass-mug {
+  width: calc(var(--w) * 1.08);
+  height: calc(var(--h) * 0.86);
   border-radius: 3px;
+  overflow: visible;
+  margin-right: calc(var(--w) * 0.3);
 }
 
-.beer-icon.glass-tulip,
-.beer-icon.glass-snifter {
-  border-radius: 4px 4px 50% 50% / 4px 4px 40% 40%;
+.beer-icon.glass-mug::after {
+  content: '';
+  position: absolute;
+  right: calc(var(--w) * -0.38);
+  top: 22%;
+  width: calc(var(--w) * 0.34);
+  height: 46%;
+  border: 1.5px solid rgba(244, 234, 213, 0.55);
+  border-left: 0;
+  border-radius: 0 40% 40% 0;
+}
+
+.beer-icon.glass-tulip {
+  border-radius: 45% 45% 50% 50% / 25% 25% 60% 60%;
+  height: calc(var(--h) * 0.82);
+  margin-bottom: calc(var(--h) * 0.18);
+  overflow: visible;
+}
+
+.beer-icon.glass-tulip > span:first-child {
+  border-radius: 45% 45% 0 0 / 60% 60% 0 0;
+}
+
+.beer-icon.glass-tulip .beer-icon-liquid {
+  border-radius: 0 0 50% 50% / 0 0 70% 70%;
+}
+
+.beer-icon.glass-tulip::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--h) * -0.2);
+  width: 60%;
+  height: calc(var(--h) * 0.2);
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, transparent 44%, rgba(244, 234, 213, 0.5) 44% 56%, transparent 56%) top / 100% 80% no-repeat,
+    linear-gradient(rgba(244, 234, 213, 0.5), rgba(244, 234, 213, 0.5)) bottom / 100% 20% no-repeat;
 }
 
 .qr {
@@ -572,4 +612,44 @@ body.happy-hour {
     radial-gradient(90% 60% at 50% -10%, rgba(180, 77, 255, 0.22) 0%, transparent 60%),
     radial-gradient(70% 50% at 100% 110%, rgba(255, 194, 58, 0.14) 0%, transparent 60%),
     var(--bg);
+}
+
+/* ===== Fumetti delle emote sopra le birre 3D (three/JuiceDirector.ts) ===== */
+.emote-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.emote-bubble {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 0.3em 0.75em;
+  border-radius: 999px;
+  background: rgba(14, 16, 24, 0.9);
+  border: 2px solid var(--ec, var(--amber));
+  box-shadow: 0 0 18px color-mix(in srgb, var(--ec, var(--amber)) 45%, transparent);
+  color: #fff4dc;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(0.8rem, 1.6vw, 1.35rem);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  will-change: transform, opacity;
+}
+
+.emote-bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  width: 12px;
+  height: 12px;
+  transform: translateX(-50%) rotate(45deg);
+  background: rgba(14, 16, 24, 0.9);
+  border-right: 2px solid var(--ec, var(--amber));
+  border-bottom: 2px solid var(--ec, var(--amber));
 }

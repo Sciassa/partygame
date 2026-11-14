@@ -4,7 +4,7 @@ import { joinUrl } from '../../shared/config.js';
 import { MODE, PHASE } from '../../shared/protocol.js';
 import { clear, fill, h, toast } from '../../shared/util/dom.js';
 import { keepScreenOn } from '../../shared/util/device.js';
-import { sfx } from '../../shared/audio/sfx.js';
+import { SoundEngine } from '../../audio/SoundEngine.ts';
 import { StageRenderer } from '../../shared/stage/StageRenderer.js';
 import { StageSync } from '../../shared/stage/StageSync.js';
 import { segmentInfo } from '../../shared/wheel/segments.js';
@@ -96,12 +96,11 @@ class HostScreen {
 
     this.stage = new StageRenderer(this.stageEl, { quality: 'high' });
     this.sync = new StageSync(this.stage, { topSlot: this.topSlot });
-    this.stage.on('tick', () => sfx.tick());
 
     core.on('state', (s) => this.render(s));
     core.on('game-event', (e) => this.#onGameEvent(e));
     core.on('player-joined', (player, rejoined) => {
-      sfx.join();
+      SoundEngine.playJoin();
       toast(rejoined ? `${player.name} è tornato al bancone` : `${player.name} ordina una ${getBeer(player.beer).name}!`);
     });
     core.on('avatar-changed', (player) => toast(`${player.name} passa a una ${getBeer(player.beer).name}`));
@@ -139,12 +138,29 @@ class HostScreen {
   #onGameEvent(e) {
     this.sync.handleEvent(e);
     if (e.type === 'spin') {
-      if (!e.nudge) sfx.spinStart();
+      if (!e.nudge) SoundEngine.playSpinStart();
       this.sync.playSpin(e.plan, 0, e.topSlot);
     } else if (e.type === 'top_slot_hit' || e.type === 'pint' || e.type === 'award') {
-      sfx.win();
+      SoundEngine.playWin();
     } else if (e.type === 'happy_hour') {
       toast('🟣 HAPPY HOUR! Tappi doppi negli ultimi 3 turni');
+    } else if (e.type === 'emote') {
+      this.sync.emote(e.playerId, e.emote, true);
+    } else if (e.type === 'sticker_trigger') {
+      SoundEngine.playStickerTrigger(Boolean(e.trap));
+    } else if (e.type === 'sneaky') {
+      SoundEngine.playSneaky();
+      toast('🕵️ Movimento sospetto al bancone!');
+    } else if (e.type === 'splash') {
+      SoundEngine.playSplash();
+      toast(`🫗 ${this.#name(e.playerId)} inzuppa ${this.#name(e.targetId)} di Birra Analcolica!`);
+    } else if (e.type === 'shot') {
+      SoundEngine.playShot();
+    } else if (e.type === 'bounty') {
+      SoundEngine.playBuzzer();
+      toast(`🎯 TAGLIA su ${this.#name(e.targetId)}!`);
+    } else if (e.type === 'bounty_claimed') {
+      SoundEngine.playCoin();
     }
   }
 
@@ -216,6 +232,8 @@ class HostScreen {
     const card = this.#cardContent(s);
     this.cardEl.classList.toggle('show', Boolean(card));
     this.cardEl.classList.toggle('wide', Boolean(card?.wide));
+    // la scena 3D scivola a sinistra per lasciare spazio alla carta (solo su schermi larghi)
+    this.#fitStageToCard(Boolean(card));
     if (!card) return clear(this.cardEl);
     this.cardEl.style.setProperty('--sc', card.color ?? 'var(--amber)');
     fill(this.cardEl, 
@@ -224,6 +242,17 @@ class HostScreen {
       ...(card.body ?? []),
     );
     this.#tickTimer();
+  }
+
+  /** La scena 3D scivola a sinistra per lasciare libero lo spazio della carta (solo schermi larghi). */
+  #fitStageToCard(visible) {
+    cancelAnimationFrame(this.insetFrame);
+    this.insetFrame = requestAnimationFrame(() => {
+      const stageWidth = this.stageEl.clientWidth;
+      const landscape = stageWidth > this.stageEl.clientHeight * 1.15;
+      const occupied = visible && landscape ? (this.cardEl.offsetWidth + 40) / stageWidth : 0;
+      this.stage?.setRightInset(Math.min(0.5, occupied));
+    });
   }
 
   #cardContent(s) {
@@ -239,7 +268,6 @@ class HostScreen {
         return {
           eyebrow: 'Spin & Sip',
           title: 'Benvenuti al pub',
-          wide: true,
           body: [
             h(
               'ul',

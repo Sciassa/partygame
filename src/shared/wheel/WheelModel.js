@@ -45,6 +45,8 @@ export class WheelModel {
   #happyHour = false;
   layout = [];
   topSlotIndex = -1;
+  /** true = l'angolo del puntatore lo imposta qualcun altro (FlapperPhysics in JuiceDirector). */
+  externalPointer = false;
 
   constructor({ textureSize = 2048, anisotropy = 1 } = {}) {
     this.textureSize = textureSize;
@@ -131,14 +133,16 @@ export class WheelModel {
 
   update(t, dt) {
     // Molla del puntatore a passi fissi (stabile anche se il frame rate crolla)
-    const p = this.#pointer;
-    const STEP = 1 / 240;
-    for (let left = dt; left > 0; left -= STEP) {
-      const h = Math.min(STEP, left);
-      p.velocity += (-180 * p.angle - 13 * p.velocity) * h;
-      p.angle += p.velocity * h;
+    if (!this.externalPointer) {
+      const p = this.#pointer;
+      const STEP = 1 / 240;
+      for (let left = dt; left > 0; left -= STEP) {
+        const h = Math.min(STEP, left);
+        p.velocity += (-180 * p.angle - 13 * p.velocity) * h;
+        p.angle += p.velocity * h;
+      }
+      this.pointerPivot.rotation.z = p.angle;
     }
-    this.pointerPivot.rotation.z = p.angle;
 
     // Lampada del puntatore: brace calda che "scatta" a ogni borchia
     this.#lampFlash = Math.max(0, this.#lampFlash - dt * 6);

@@ -34,6 +34,16 @@ Si vince con le **Pinte d'Oro**; a parità di Pinte contano i **Tappi**. La part
 - Ci sono 4 famiglie: Economia, Strategia, Manipolazione ruota e Sabotaggi. L'Espansione allarga davvero lo spicchio sulla ruota 3D.
 - I sabotaggi (Blackout, Dito Tremante, Fuso Orario, Sabotaggio, Dislessia) cambiano l'interfaccia dei telefoni nel prossimo evento e colpiscono tutti tranne il proprietario. La Dittatura fa scegliere la categoria del prossimo Trivia.
 
+**🍻 Bancone & Sottobanco** (dal tasto *Bancone* sul telefono, aperto a inizio turno: negozio, scommesse, lancio):
+- **🎯 Taglia (40 Tappi):** metti una taglia su un avversario per 2 turni; sulla sua birra 3D compare il cartellino *TAGLIA*. Chi lo batte (Sfida 1v1, Asta al Buio) o gli fa perdere Tappi (con un suo adesivo, smascherandolo da Impostore) incassa **60 Tappi** dalla banca.
+- **🤫 Sottobanco:** passi 20 o 50 Tappi a un amico, uno per turno. Sulla TV compare solo «Movimento sospetto al bancone!».
+- **🥃 Shot** (uno alla volta nel taschino, si usa nel proprio turno prima di lanciare):
+  - **Assenzio (60):** il prossimo lancio ignora le trappole nemiche e non paga royalties.
+  - **Tequila Bum Bum (50):** i guadagni del prossimo evento valgono x2.5; se non guadagni nulla, -50.
+  - **Birra Analcolica (45):** la lanci su un avversario. La sua birra 3D diventa grigia e bagnata, e al suo prossimo Trivia le risposte sono coperte di schiuma: servono 2 tocchi per scoppiarla.
+
+**Emote:** dal telefono CIN CIN · AHAHAH · BUUU · DAJE (ricarica di 2.5 s). La birra del giocatore salta sulla TV con un fumetto, uno spruzzo di schiuma e il suo suono.
+
 **Happy Hour:** negli ultimi 3 turni le luci 3D passano al neon viola e oro e tutti i Tappi vinti o persi valgono doppio.
 
 **Fine partita:** 3 Bonus Segreti, +1 Pinta d'Oro ciascuno, poi la classifica.
@@ -88,23 +98,32 @@ src/
 │   ├── game/stickerEngine.js  negozio e i 30 adesivi (piazzamento, Calamita, Jackpot, effetti)
 │   ├── game/events/         trivia + sfida 1v1, impostore, spillatura, asta, higher/lower
 │   ├── game/awards.js       Bonus Segreti di fine partita
+│   ├── game/counter.js      Bancone & Sottobanco (taglie, passaggi, shot) e cooldown delle emote
 │   ├── net/HostPeer.js      peer PeerJS con ID derivato dal codice stanza
 │   ├── state/GameState.js   stato della partita (giocatori, birre, monete, ruota)
+│   ├── state/BeerPoolManager.ts  registro Map<peerId, beerId>: birre uniche, cambi validati
 │   ├── physics/WheelPhysics.js  forza → velocità iniziale, risoluzione dello spicchio (mod 2π)
 │   └── screen/HostScreen.js UI dello schermo Salotto (palco 3D, QR, giocatori)
 ├── client/                  ── CONTROLLER: telefono del giocatore ──
 │   ├── ClientApp.js         UI giocatore e riconnessione automatica
 │   ├── net/ClientPeer.js    connessione WebRTC verso l'host
 │   ├── ui/SpinPad.js        swipe e "tieni premuto" → forza del lancio (0..1)
-│   ├── ui/panels.js         un pannello per ogni fase/minigioco (+ sabotaggi sull'interfaccia)
-│   └── ui/BeerPicker.js     scelta della birra-avatar
+│   ├── ui/panels.js         un pannello per ogni fase/minigioco (+ sabotaggi e schiuma sull'interfaccia)
+│   ├── ui/BeerPicker.js     «🍺 Cambia Birra»: griglia 3×4 in vetro smerigliato, aggiornata in tempo reale
+│   ├── ui/ReactionBar.js    barra delle emote con ricarica
+│   └── ui/CounterSheet.js   foglio «Bancone & Sottobanco»
+├── three/                   ── 3D in TypeScript ──
+│   ├── BeerAvatarBuilder.ts bicchieri per rotazione (LatheGeometry) da 4 profili + getRadiusAtY
+│   └── JuiceDirector.ts     respiro/palpebre/bollicine, pedana di lancio, puntatore fisico, regia camera, emote
+├── audio/SoundEngine.ts     tutti i suoni sintetizzati con Web Audio (clack, adesivi, emote, buzzer...)
 ├── pocket/startPocket.js    HostCore + ClientApp sullo stesso telefono (LocalLink)
 ├── shared/                  codice usato da entrambi i lati
 │   ├── protocol.js          tipi di messaggio, fasi, versione del protocollo
 │   ├── config.js            codice stanza, opzioni PeerJS/ICE, costanti
 │   ├── net/Link.js          canale astratto: PeerLink (WebRTC) e LocalLink (in memoria)
 │   ├── wheel/               kinematics (fisica ad attrito), WheelModel 3D, segmenti, texture
-│   ├── avatars/             beers.js (12 birre), BeerAvatar 3D, AvatarLineup (bancone)
+│   ├── avatars/             beers.js (12 birre), AvatarLineup (anfiteatro sul bancone)
+│   ├── game/                display, regole condivise del Bancone, emote
 │   ├── stage/               StageRenderer (scena, luci, bloom, loop), PubSet, StageSync
 │   └── ui/beerIcon.js       iconcina CSS del bicchiere
 ├── data/                    domande Trivia, 30 adesivi, 50 parole dell'Impostore, 44 curiosità numeriche
@@ -129,22 +148,72 @@ Con un passo di Eulero dentro `requestAnimationFrame`, una TV a 60 Hz e un telef
 
 ### Avatar: le birre
 
-`shared/avatars/beers.js` definisce 12 birre: Lager, IPA, Stout, Weiss, Pilsner, Red Ale, Sour, Bock, NEIPA, Porter, Blanche, Barley Wine. Ognuna ha il colore del liquido, quello della schiuma, la forma del bicchiere e un colore "identità" per la UI. Ogni birra è **unica** nella stanza. L'host tiene un **pool delle birre disponibili** (`GameState.beerPool`, all'inizio tutte e 12):
+`shared/avatars/beers.js` definisce 12 birre: Lager, IPA, Stout, Weiss, Pilsner, Red Ale, Sour, Bock, NEIPA, Porter, Blanche, Barley Wine. Ognuna ha il colore del liquido, quello della schiuma, la famiglia del bicchiere e un colore "identità" per la UI.
 
-- quando un giocatore entra, l'host estrae una birra a caso **solo dal pool** e la rimuove;
-- quando un giocatore si disconnette, la sua birra **torna nel pool** e può andare a un nuovo arrivato. Il giocatore resta in classifica con monete e posto, e sul bancone diventa un bicchiere vuoto;
-- quando rientra, riprende la sua vecchia birra se è ancora libera, altrimenti ne pesca un'altra dal pool;
-- la stanza è piena con 12 giocatori **connessi**, uno per birra.
+**Birre uniche: `BeerPoolManager`** (`host/state/BeerPoolManager.ts`) tiene `assignedBeers: Map<peerId, beerId>`.
+- Chi entra riceve una birra libera **a caso**. Chi esce la libera, e quando rientra riprende la sua se è ancora libera.
+- La stanza è piena con 12 giocatori connessi, uno per birra.
+- **Cambio birra** dal tasto «🍺 Cambia Birra» (in lobby e finché la ruota non ha girato la prima volta). Il telefono invia `{ type: 'REQUEST_BEER_CHANGE', peerId, newBeerId }`. L'host usa l'id della sessione, non quello scritto nel messaggio, controlla che la birra sia libera, aggiorna la mappa e trasmette a tutti `{ type: 'BEER_POOL_SYNC', assigned, free }`.
+- Nel selettore le birre occupate sono semitrasparenti (opacità 0.35), non cliccabili e mostrano il nome di chi le beve. La propria ha il bordo ambra.
+- In 3D il vecchio avatar viene smontato (geometrie e materiali liberati) e il nuovo entra crescendo da 0.01 a 1 in 350 ms, con un ease *backOut*.
 
-- Chi entra riceve una birra libera **a caso**. Al primo ingresso il telefono propone il selettore; la birra si può cambiare in ogni momento toccando il proprio nome (`avatar:pick { beerId }`, l'host verifica che sia libera).
-- Sul palco 3D ogni giocatore è un bicchiere "designer toy" come nella reference: vetro smerigliato, liquido sfumato, schiuma cremosa che deborda appena, faccina minimale, **braccine e gambette a tubo** del colore della birra (nere per le scure). Le birre stanno sedute sul bancone ai lati della ruota; sui telefoni stanno in fila davanti al piedistallo.
-- **Sono vive** (`AvatarLineup`):
-  - in attesa dondolano le gambe, respirano, sbattono le palpebre e ogni tanto fanno un'azione a caso: salutano, calciano, mettono le mani sui fianchi, guardano la ruota, saltellano, brindano, fanno le bollicine o dondolano;
-  - chi è di turno saltella e sbraccia;
-  - durante lo spin si girano verso la ruota, tifano e sobbalzano a ogni scatto del puntatore;
-  - al risultato applaudono, e chi vince monete fa una giravolta tra le bollicine;
-  - chi si disconnette resta come bicchiere vuoto, accasciato.
-- È tutto procedurale (primitive three.js, parti fisse fuse per materiale: circa 10 draw call per birra). `BeerAvatar` ha un'API minima (`setBeer`, `setDimmed`, `arms`, `legs`, `eyes`), quindi in futuro si può passare a modelli GLB senza toccare il resto.
+**Geometria** (`three/BeerAvatarBuilder.ts`): ogni bicchiere è una `LatheGeometry` (32 segmenti) generata da uno di 4 profili.
+
+| Profilo | Birre | Forma |
+| --- | --- | --- |
+| `PINT_GLASS` | Stout, Red Ale, Porter | Base r 0.28 fino a y 1.1, rigonfiamento nonic r 0.38 a y 0.85 |
+| `MUG_STEIN` | Lager, Bock | Cilindro r 0.36 con manico `Torus(0.18, 0.04, 12, 24, π)` |
+| `TULIP_STEM` | IPA, Sour, Barley Wine | Piede r 0.25, stelo r 0.07 fino a y 0.35, coppa r 0.37 a y 0.65, bocca r 0.30 |
+| `WEISS_TALL` | Weiss, Pilsner, Blanche, NEIPA | Alto 1.25: base 0.24, vita 0.22, bocca 0.34 |
+
+`getRadiusAtY(profilo, yNormalizzata)` guida tutto il resto, così niente fluttua e niente compenetra:
+- liquido e schiuma (cilindro smussato più 5 sfere) seguono il profilo;
+- occhi (`Sphere(0.038)` schiacciate, con riflesso) e bocca stanno a raggio(y) + 0.025;
+- le spalle sono a raggio(y) + 0.04 (sul boccale le braccia vanno avanti di 25°, per non toccare il manico);
+- il bicchiere è sollevato di 0.14 su gambette con scarpette rivolte verso la camera.
+
+**Disposizione ad anfiteatro** davanti alla ruota.
+- Fino a 6 giocatori stanno su un arco (R 3.2) da -70° a +70°; oltre, su due archi sfalsati (R 3.2 e 4.1).
+- La finestra centrale -18°..+18° resta libera: lì c'è la **Pedana di Lancio**, dove cammina chi è di turno, sotto un occhio di bue caldo.
+- Sulla TV l'arco si allarga, sui telefoni si stringe. Le birre guardano la camera.
+
+**Vita** (`AvatarLineup` + `three/JuiceDirector.ts`):
+- **Respiro:** squash & stretch `s = sin(t·3.2 + i·1.37)·0.035`, a volume costante.
+- **Dondolio:** `sin(t·1.6 + φ)·0.04`.
+- **Palpebre:** ogni 3.5 + (i mod 3) s, chiuse per 120 ms.
+- **Bollicine:** 18 per birra, in un `InstancedMesh`, salgono nel liquido.
+- **Comportamenti:** azioni casuali in attesa, tifo durante lo spin, applausi, esultanze. Chi è di turno ha le braccia al doppio della velocità.
+- **Segni sul bicchiere:** cartellino 🎯 TAGLIA, bicchiere grigio e gocciolante per la Birra Analcolica.
+
+### Regia, puntatore e audio
+
+- **Puntatore fisico** (`FlapperPhysics`).
+  - Vengono contati **tutti** i confini di spicchio attraversati in un frame, anche a ruota velocissima.
+  - A ogni piolo: `vel = min(velocità·1.8, 12)`, nel verso della rotazione.
+  - Molla: `angolo += vel·dt; vel += (-angolo·180 - vel·14)·dt`, integrata a passi di 1/240 s.
+  - A ogni piolo suona `SoundEngine.playPegClack(velocità)`.
+- **Telecamera dinamica** (`CameraDirector`, inseguimento `lerp(dt·3.5)`):
+  - campo largo in attesa;
+  - leggera carrellata indietro con orbita lenta durante il lancio;
+  - sotto 1.8 rad/s, zoom di suspense sulla metà alta della ruota e sul puntatore, poi ritorno al campo largo.
+- **Inquadrature automatiche:** sono calcolate con una ricerca binaria sulla proiezione dei punti chiave (ruota, lampada, posti, pedana), quindi funzionano in ogni formato. Sulla TV, quando c'è la carta evento a destra, la scena scivola nello spazio libero (`camera.setViewOffset`).
+- **Audio procedurale** (`audio/SoundEngine.ts`, zero file). Si sblocca al primo tocco e un compressore sul master evita la saturazione. Effetti:
+  - clack del puntatore: rumore bianco passa-banda a 950 Hz, inviluppo di 35 ms, più acuto con la velocità;
+  - adesivo bonus: arpeggio a onda triangolare Do5-Mi5-Sol5-Do6;
+  - trappola: discesa cromatica a dente di sega con passa-basso da 180 a 70 Hz;
+  - CIN CIN: tintinnio di vetro con parziali a 1800 e 2400 Hz;
+  - poi risata, pernacchia, DAJE, buzzer, lancio, vincita, monete, splash, shot, bolle che scoppiano.
+
+### Telefono (~6", iPhone con Dynamic Island)
+
+- `viewport-fit=cover` e padding con `env(safe-area-inset-*)`: niente sotto la Dynamic Island né sotto la barra Home.
+- In Pocket il palco 3D ha un'**altezza per fase**:
+  - 56% dello schermo quando la ruota gira e si ferma;
+  - circa 40% in lobby, al lancio e nei riepiloghi;
+  - 27% quando servono spazio per rispondere o comprare.
+- Il Top Slot sta in una riga compatta sotto la ruota, non sopra.
+- In basso c'è il dock con le emote e il tasto Bancone; il pannello si scorre senza tagliare la cima.
+- Sotto i 700 px di altezza (iPhone SE, Safari con le barre) tutto si compatta ancora.
 
 ### Robustezza di rete
 

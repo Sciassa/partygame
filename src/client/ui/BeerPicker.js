@@ -1,56 +1,78 @@
-import { h } from '../../shared/util/dom.js';
+import { h, fill } from '../../shared/util/dom.js';
 import { BEERS } from '../../shared/avatars/beers.js';
 import { beerIcon } from '../../shared/ui/beerIcon.js';
 
 /**
- * Modale per scegliere la propria birra-avatar. Ogni birra è unica nella stanza:
- * quelle già prese da altri sono disattivate con il nome di chi le ha.
+ * Modale «🍺 Cambia Birra»: griglia 3×4 in vetro smerigliato scuro.
+ * Ogni birra è unica nella stanza:
+ *  - occupata da un altro: opacità 0.35, non cliccabile, con il nome di chi la beve
+ *  - la mia: bordo ambra 2px
+ * La vista si aggiorna da sola a ogni BEER_POOL_SYNC (update), così due giocatori che puntano
+ * la stessa birra vedono subito chi l'ha presa per primo.
  *
- * @param {{ players:Array, myId:string, onPick:(beerId:string)=>void, firstTime?:boolean }} opts
+ * @param {{ getView: () => { assigned: Record<string,string>, players: Array, myId: string, canChange: boolean },
+ *           onPick: (beerId:string) => void, firstTime?: boolean, onClose?: () => void }} opts
  */
-export function openBeerPicker({ players, myId, onPick, firstTime = false }) {
-  const me = players.find((p) => p.id === myId);
-  // solo le birre addosso a giocatori connessi sono occupate (le altre sono tornate nel pool)
-  const owners = new Map(players.filter((p) => p.id !== myId && p.beer).map((p) => [p.beer, p.name]));
-  const close = () => modal.remove();
+export function openBeerPicker({ getView, onPick, firstTime = false, onClose }) {
+  const grid = h('div', { class: 'beer-grid' });
+  const note = h('p', { class: 'beer-note' });
+  let pending = null;
 
-  const grid = h(
-    'div',
-    { class: 'beer-grid' },
-    BEERS.map((beer) => {
-      const owner = owners.get(beer.id);
-      const mine = me?.beer === beer.id;
-      return h(
-        'button',
-        {
-          class: `beer-option ${mine ? 'selected' : ''}`,
-          type: 'button',
-          disabled: Boolean(owner),
-          style: { '--accent': beer.accent },
-          onclick: () => {
-            if (!mine) onPick(beer.id);
-            close();
+  const close = () => {
+    modal.remove();
+    onClose?.();
+  };
+
+  function render() {
+    const { assigned, players, myId, canChange } = getView();
+    const names = new Map(players.map((p) => [p.id, p.name]));
+    const ownerOf = new Map(Object.entries(assigned).map(([pid, beer]) => [beer, pid]));
+    const myBeer = assigned[myId] ?? players.find((p) => p.id === myId)?.beer;
+    if (pending && myBeer === pending) pending = null;
+    fill(
+      grid,
+      BEERS.map((beer) => {
+        const owner = ownerOf.get(beer.id);
+        const mine = beer.id === myBeer;
+        const taken = Boolean(owner) && owner !== myId;
+        return h(
+          'button',
+          {
+            class: `beer-option glass-card ${mine ? 'selected' : ''} ${taken ? 'taken' : ''} ${pending === beer.id ? 'pending' : ''}`,
+            type: 'button',
+            disabled: taken || !canChange,
+            style: { '--accent': beer.accent, '--liquid': beer.liquid },
+            onclick: () => {
+              if (mine || taken) return;
+              pending = beer.id;
+              onPick(beer.id);
+              render();
+            },
           },
-        },
-        beerIcon(beer.id, 'lg'),
-        h('span', { class: 'beer-option-name' }, beer.name),
-        h('span', { class: 'beer-option-sub' }, owner ? `di ${owner}` : mine ? 'la tua' : beer.tagline),
-      );
-    }),
-  );
+          h('span', { class: 'beer-swatch' }),
+          beerIcon(beer.id, 'lg'),
+          h('span', { class: 'beer-option-name' }, beer.name),
+          taken ? h('span', { class: 'owner-badge' }, names.get(owner) ?? '?') : mine ? h('span', { class: 'owner-badge mine' }, 'la tua') : null,
+        );
+      }),
+    );
+    note.textContent = canChange ? 'Le birre in grigio sono già sul bancone di qualcun altro.' : '🔒 La ruota ha già girato: ti tieni la tua birra.';
+  }
 
   const modal = h(
     'div',
-    { class: 'modal', onclick: (e) => e.target === modal && close() },
+    { class: 'modal beer-modal', onclick: (e) => e.target === modal && close() },
     h(
       'div',
-      { class: 'modal-card modal-wide' },
+      { class: 'modal-card glass-modal' },
       h('div', { class: 'eyebrow' }, firstTime ? 'Benvenuto al bancone' : 'Cambia birra'),
-      h('h2', {}, firstTime ? 'Ti abbiamo servito questa. Va bene?' : 'Scegli la tua birra'),
+      h('h2', {}, firstTime ? 'Ti abbiamo servito questa. Va bene?' : '🍺 Scegli la tua birra'),
       grid,
-      h('button', { class: 'btn btn-ghost', onclick: close }, firstTime ? 'Va bene così' : 'Chiudi'),
+      note,
+      h('button', { class: 'btn btn-ghost', type: 'button', onclick: close }, firstTime ? 'Va bene così' : 'Fatto'),
     ),
   );
   document.body.append(modal);
-  return close;
+  render();
+  return { update: render, close };
 }
